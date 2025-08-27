@@ -14,21 +14,31 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # MLflow configuration
-MLFLOW_TRACKING_URI = "sqlite:///mlflow.db"
+MLFLOW_TRACKING_URI = "sqlite:////home/anish/airflow/dags/mlflow.db"
 EXPERIMENT_NAME = "Framingham"
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment(EXPERIMENT_NAME)
 
 # Function to fetch model metrics from MLflow
 def get_model_metrics():
     try:
+        # Verify MLflow database exists
+        db_path = "/home/anish/airflow/dags/mlflow.db"
+        if not os.path.exists(db_path):
+            logger.error(f"MLflow database not found at {db_path}")
+            return None, None
+        logger.info(f"MLflow database found at {db_path}")
+
         client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
         experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
         if not experiment:
-            logger.error(f"Experiment '{EXPERIMENT_NAME}' not found")
+            logger.error(f"Experiment '{EXPERIMENT_NAME}' not found in {MLFLOW_TRACKING_URI}")
             return None, None
         
-        # Search for runs in "Framingham" experiment, trying multiple run names
-        run_names = ["final_catboost_model", "catboost_optuna", "catboost_default"]
+        logger.info(f"Found experiment '{EXPERIMENT_NAME}' with ID {experiment.experiment_id}")
+        
+        # Search for runs, prioritizing recent ones with metrics
+        run_names = ["model_monitoring", "final_catboost_model", "catboost_optuna", "catboost_default"]
         for run_name in run_names:
             runs = client.search_runs(
                 experiment_ids=[experiment.experiment_id],
@@ -42,8 +52,10 @@ def get_model_metrics():
                 accuracy = metrics.get("accuracy", None)
                 precision = metrics.get("precision", None)
                 if accuracy is not None and precision is not None:
-                    logger.info(f"Fetched metrics from run '{run_name}': Accuracy={accuracy:.4f}, Precision={precision:.4f}")
+                    logger.info(f"Fetched metrics from run '{run_name}' (ID: {run.info.run_id}): Accuracy={accuracy:.4f}, Precision={precision:.4f}")
                     return accuracy, precision
+            else:
+                logger.warning(f"No runs found for '{run_name}' in experiment '{EXPERIMENT_NAME}'")
         logger.error("No runs with accuracy and precision found")
         return None, None
     except Exception as e:
@@ -51,11 +63,16 @@ def get_model_metrics():
         return None, None
 
 # Load trained pipeline
-with open("/home/anish/airflow/dags/models/final_pipeline.pkl", "rb") as f:
-    pipeline = pickle.load(f)
-
-model = pipeline['model']
-scaler = pipeline['scaler']
+try:
+    with open("/home/anish/airflow/dags/models/final_pipeline.pkl", "rb") as f:
+        pipeline = pickle.load(f)
+    model = pipeline['model']
+    scaler = pipeline['scaler']
+    logger.info("Loaded pipeline from /home/anish/airflow/dags/models/final_pipeline.pkl")
+except Exception as e:
+    st.error(f"Failed to load model pipeline: {str(e)}")
+    logger.error(f"Failed to load pipeline: {str(e)}")
+    raise
 
 # Fetch model metrics
 accuracy, precision = get_model_metrics()
@@ -132,7 +149,7 @@ if submitted:
             """
         )
     else:
-        st.warning("Unable to fetch model metrics from MLflow. Using default values.")
+        st.warning("Unable to fetch model metrics from MLflow. Please ensure the DAG has run successfully and mlflow.db is accessible.")
         st.write(
             """
             **Algorithm:** CatBoost Classifier  
@@ -174,7 +191,6 @@ if submitted:
         df_scaled[numeric_cols] = scaler.transform(df_scaled[numeric_cols])
 
         # MLflow logging
-        mlflow.set_experiment(EXPERIMENT_NAME)
         with mlflow.start_run(run_name="user_prediction") as run:
             for key, value in input_dict.items():
                 mlflow.log_param(key, value)
