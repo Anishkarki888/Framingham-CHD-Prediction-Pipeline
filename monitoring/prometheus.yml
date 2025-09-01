@@ -1,22 +1,9 @@
-version: '3.8'
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    volumes:
-      - /home/anish/airflow/dags/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
-    depends_on:
-      - prometheus
+scrape_configs:
+  - job_name: 'framingham_app'
+    static_configs:
+      - targets: ['172.17.0.1:8001']  # your Python metrics server
+

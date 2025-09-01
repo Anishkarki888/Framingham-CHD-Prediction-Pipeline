@@ -1,16 +1,168 @@
-version: '3.8'
+version: '3.9'
+
 services:
+  # ------------------------
+  # Airflow dependencies
+  # ------------------------
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mlops
+
+  redis:
+    image: redis:latest
+    networks:
+      - mlops
+
+  airflow-webserver:
+    image: apache/airflow:2.9.0
+    container_name: airflow-webserver
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - ./dags:/opt/airflow/dags
+    ports:
+      - "8080:8080"
+    command: webserver
+    networks:
+      - mlops
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.0
+    container_name: airflow-scheduler
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - ./dags:/opt/airflow/dags
+    command: scheduler
+    networks:
+      - mlops
+
+  airflow-worker:
+    image: apache/airflow:2.9.0
+    container_name: airflow-worker
+    depends_on:
+      - airflow-scheduler
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
+    volumes:
+      - ./dags:/opt/airflow/dags
+    command: celery worker
+    networks:
+      - mlops
+
+  # ------------------------
+  # MLflow Tracking Server
+  # ------------------------
+  mlflow:
+    image: crflynn/mlflow:latest
+    container_name: mlflow
+    environment:
+      - BACKEND_STORE_URI=sqlite:///mlflow.db
+      - ARTIFACT_ROOT=/mlflow/artifacts
+    volumes:
+      - ./mlruns:/mlflow/artifacts
+    ports:
+      - "5000:5000"
+    networks:
+      - mlops
+
+  # ------------------------
+  # Streamlit App
+  # ------------------------
+  streamlit:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./streamlit_app:/app
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      - mlflow
+    networks:
+      - mlops
+
+  # ------------------------
+  # Monitoring API
+  # ------------------------
+  monitor_model:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    container_name: monitor_model
+    ports:
+      - "8001:8001"
+    networks:
+      - mlops
+
+  # ------------------------
+  # Prometheus
+  # ------------------------
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
     volumes:
-      - /home/anish/airflow/dags/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-    network_mode: host
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+    depends_on:
+      - monitor_model
+    networks:
+      - mlops
 
+  # ------------------------
+  # Grafana
+  # ------------------------
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
-    network_mode: host
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - mlops
+
+# ------------------------
+# Shared Volumes
+# ------------------------
+volumes:
+  postgres_data:
+  mlruns:
+
+# ------------------------
+# Shared Network
+# ------------------------
+networks:
+  mlops:
+    driver: bridge
