@@ -5,7 +5,7 @@ import great_expectations as gx
 context = gx.get_context()
 
 # Load your pickle dataset
-df = pd.read_pickle("/home/anish/airflow/dags/data/framingham_raw.pkl")
+df = pd.read_pickle("/home/anish/airflow/dags/monitoring/data/framingham_raw.pkl")
 
 # Create a validator from pandas dataframe
 validator = context.sources.pandas_default.read_dataframe(df)

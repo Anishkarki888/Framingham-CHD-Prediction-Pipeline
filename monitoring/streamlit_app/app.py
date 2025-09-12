@@ -1,3 +1,5 @@
+import sys
+import os
 import streamlit as st
 import pickle
 import pandas as pd
@@ -6,25 +8,28 @@ import mlflow.sklearn
 import tempfile
 import json
 import logging
-import os
 from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, Field
 from prometheus_client import Gauge, start_http_server
+
+# ---------------- Add parent DAG folder to path ----------------
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from utils import load_pickle, save_pickle
 
 # ---------------- Logging setup ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ---------------- Paths ----------------
-BASE_DIR = "/home/anish/airflow/dags"
-MODEL_PATH = f"{BASE_DIR}/models/final_pipeline.pkl"
-MLFLOW_TRACKING_URI = f"sqlite:///{BASE_DIR}/mlflow.db"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+MODEL_PATH = os.path.join(BASE_DIR, "models/final_pipeline.pkl")
+MLFLOW_DB = "/home/anish/airflow/dags/mlflow.db"
 EXPERIMENT_NAME = "Framingham"
 
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB}")
 
 # ---------------- Prometheus setup ----------------
-PROM_PORT = 8002  # Different from DAG's 8001
+PROM_PORT = 8002
 try:
     start_http_server(PROM_PORT)
     logger.info(f"✅ Prometheus metrics server started on :{PROM_PORT}")
@@ -52,11 +57,11 @@ class PatientInput(BaseModel):
 # ---------------- Function to fetch model metrics from MLflow ----------------
 def get_model_metrics():
     try:
-        if not os.path.exists(BASE_DIR + "/mlflow.db"):
+        if not os.path.exists(MLFLOW_DB):
             logger.error("MLflow database not found")
             return None, None
 
-        client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+        client = MlflowClient(tracking_uri=f"sqlite:///{MLFLOW_DB}")
         experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
         if not experiment:
             logger.error(f"Experiment '{EXPERIMENT_NAME}' not found")
@@ -84,15 +89,14 @@ def get_model_metrics():
 
 # ---------------- Load trained pipeline ----------------
 try:
-    with open(MODEL_PATH, "rb") as f:
-        pipeline = pickle.load(f)
+    pipeline = load_pickle(MODEL_PATH, "ML Pipeline")
     model = pipeline['model']
     scaler = pipeline['scaler']
-    logger.info(f"Loaded pipeline from {MODEL_PATH}")
+    logger.info(f"✅ Loaded pipeline from {MODEL_PATH}")
 except Exception as e:
     st.error(f"Failed to load model pipeline: {str(e)}")
     logger.error(f"Failed to load pipeline: {str(e)}")
-    raise
+    st.stop()
 
 # ---------------- Fetch model metrics ----------------
 accuracy, precision = get_model_metrics()
@@ -115,12 +119,12 @@ to estimate your **10-year risk of developing heart disease**.
 username = st.text_input("Enter your name (unique for each session):", max_chars=50)
 if not username:
     st.warning("Please enter your name to proceed with prediction.")
-    st.stop()  # Stop here until username is entered
+    st.stop()
 
 # ---------------- Input form ----------------
 with st.form("health_form"):
     st.subheader("👤 Demographics")
-    age = st.number_input("Age (years)", min_value=18, max_value=100, value=45)
+    age = st.number_input("Age (years)", 18, 100, 45)
     male = st.radio("Sex", ["Female", "Male"])
     
     education_map = {1: "Some High School", 2: "High School/GED", 3: "Some College", 4: "College"}
@@ -132,7 +136,7 @@ with st.form("health_form"):
 
     st.subheader("🚬 Lifestyle")
     smoker = st.radio("Do you currently smoke?", ["No", "Yes"])
-    cigs_per_day = st.slider("Cigarettes per day (if smoker)", min_value=0, max_value=70, value=0)
+    cigs_per_day = st.slider("Cigarettes per day (if smoker)", 0, 70, 0)
 
     st.subheader("💉 Medical History")
     bp_meds = st.radio("On BP medication?", ["No", "Yes"])
@@ -141,12 +145,12 @@ with st.form("health_form"):
     diabetes = st.radio("Diabetes?", ["No", "Yes"])
 
     st.subheader("🩺 Health Measurements")
-    tot_chol = st.number_input("Total Cholesterol (mg/dL)", min_value=100.0, max_value=400.0, value=200.0)
-    sys_bp = st.number_input("Systolic BP (mmHg)", min_value=80.0, max_value=250.0, value=120.0)
-    dia_bp = st.number_input("Diastolic BP (mmHg)", min_value=50.0, max_value=150.0, value=80.0)
-    bmi = st.number_input("BMI", min_value=15.0, max_value=50.0, value=25.0)
-    heart_rate = st.number_input("Heart Rate (bpm)", min_value=40, max_value=150, value=70)
-    glucose = st.number_input("Glucose (mg/dL)", min_value=40.0, max_value=400.0, value=90.0)
+    tot_chol = st.number_input("Total Cholesterol (mg/dL)", 100.0, 400.0, 200.0)
+    sys_bp = st.number_input("Systolic BP (mmHg)", 80.0, 250.0, 120.0)
+    dia_bp = st.number_input("Diastolic BP (mmHg)", 50.0, 150.0, 80.0)
+    bmi = st.number_input("BMI", 15.0, 50.0, 25.0)
+    heart_rate = st.number_input("Heart Rate (bpm)", 40, 150, 70)
+    glucose = st.number_input("Glucose (mg/dL)", 40.0, 400.0, 90.0)
 
     submitted = st.form_submit_button(f"🔍 Calculate Risk for {username}")
 
@@ -178,14 +182,11 @@ if submitted:
             "glucose": glucose
         }
 
-        # Validate with Pydantic
         patient = PatientInput(**input_dict)
         if patient.currentSmoker == 0 and patient.cigsPerDay > 0:
             st.error("Non-smokers must have 0 cigarettes per day.")
         else:
             df_input = pd.DataFrame([input_dict])
-
-            # ---------------- Scaling (columns that scaler was trained on) ----------------
             scaler_cols = ["cigsPerDay", "BPMeds", "totChol", "sysBP", "diaBP", "BMI", "heartRate", "glucose"]
             df_input[scaler_cols] = scaler.transform(df_input[scaler_cols])
 
@@ -201,11 +202,9 @@ if submitted:
                 mlflow.log_metric(f"predicted_risk_probability_{username}", prob)
                 mlflow.log_metric(f"predicted_risk_class_{username}", pred_class)
 
-                # ---------------- Prometheus metrics ----------------
                 Gauge(f"predicted_risk_probability_{username}", "Prediction probability", ["app"]).labels(app="framingham_app").set(prob)
                 Gauge(f"predicted_risk_class_{username}", "Prediction class", ["app"]).labels(app="framingham_app").set(pred_class)
 
-                # Log input as artifact
                 with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as tmp:
                     json.dump(input_dict, tmp, indent=2)
                     tmp_path = tmp.name
@@ -214,7 +213,6 @@ if submitted:
 
                 run_id = run.info.run_id
 
-            # ---------------- Display results ----------------
             prob_percent = round(prob * 100, 2)
             risk_label = "Low Risk ✅" if pred_class == 0 else "High Risk ⚠️"
             message = (

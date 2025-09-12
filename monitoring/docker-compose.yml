@@ -1,168 +1,134 @@
 version: '3.9'
 
 services:
-  # ------------------------
-  # Airflow dependencies
-  # ------------------------
-  postgres:
-    image: postgres:13
+  # ---------------- MariaDB ----------------
+  mariadb:
+    image: mariadb:10.11
+    container_name: mariadb_container
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - mlops
-
-  redis:
-    image: redis:latest
-    networks:
-      - mlops
-
-  airflow-webserver:
-    image: apache/airflow:2.9.0
-    container_name: airflow-webserver
-    depends_on:
-      - postgres
-      - redis
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
-    volumes:
-      - ./dags:/opt/airflow/dags
+      MYSQL_ROOT_PASSWORD: Pa55W0rd123#
+      MYSQL_DATABASE: Framingham
     ports:
-      - "8080:8080"
-    command: webserver
-    networks:
-      - mlops
-
-  airflow-scheduler:
-    image: apache/airflow:2.9.0
-    container_name: airflow-scheduler
-    depends_on:
-      - postgres
-      - redis
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
-      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - "3308:3306"
     volumes:
-      - ./dags:/opt/airflow/dags
-    command: scheduler
+      - mariadb_data:/var/lib/mysql
+    restart: always
     networks:
       - mlops
 
-  airflow-worker:
-    image: apache/airflow:2.9.0
-    container_name: airflow-worker
-    depends_on:
-      - airflow-scheduler
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow@postgres/airflow
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:6379/0
-    volumes:
-      - ./dags:/opt/airflow/dags
-    command: celery worker
+  # ---------------- Redis ----------------
+  redis:
+    image: redis:7.0-alpine
+    container_name: redis_container
+    ports:
+      - "6380:6379"
+    restart: always
     networks:
       - mlops
 
-  # ------------------------
-  # MLflow Tracking Server
-  # ------------------------
+  # ---------------- MLflow ----------------
   mlflow:
-    image: crflynn/mlflow:latest
-    container_name: mlflow
+    image: ghcr.io/mlflow/mlflow:v2.16.2
+    container_name: mlflow_container
     environment:
-      - BACKEND_STORE_URI=sqlite:///mlflow.db
-      - ARTIFACT_ROOT=/mlflow/artifacts
+      MLFLOW_BACKEND_STORE_URI: sqlite:////mlflow/mlflow.db
+      MLFLOW_ARTIFACT_ROOT: /mlflow/artifacts
     volumes:
-      - ./mlruns:/mlflow/artifacts
+      - mlflow_data:/mlflow
     ports:
       - "5000:5000"
+    command: mlflow server --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts --host 0.0.0.0 --port 5000
     networks:
       - mlops
 
-  # ------------------------
-  # Streamlit App
-  # ------------------------
-  streamlit:
-    build:
-      context: ./streamlit_app
-      dockerfile: Dockerfile
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./streamlit_app:/app
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
-    depends_on:
-      - mlflow
-    networks:
-      - mlops
-
-  # ------------------------
-  # Monitoring API
-  # ------------------------
+  # ---------------- Monitoring (Python Metrics) ----------------
   monitor_model:
     build:
       context: .
       dockerfile: Dockerfile.monitor
-    container_name: monitor_model
+    container_name: monitor_model_container
     ports:
-      - "8001:8001"
+      - "8001:8001"  # Python metrics server
+    volumes:
+      - ./models:/app/models:rw
+      - ./data:/app/data:rw
+      - ./reports:/app/reports:rw
+      - mlflow_data:/app/mlflow:rw
+    environment:
+      - MODELS_PATH=/app/models
+      - DATA_PATH=/app/data
+      - REPORTS_PATH=/app/reports
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PROMETHEUS_PORT=8001
+    command: python monitor_model.py
+    depends_on:
+      - mlflow
+      - mariadb
+      - redis
     networks:
       - mlops
+    restart: unless-stopped
 
-  # ------------------------
-  # Prometheus
-  # ------------------------
+  # ---------------- Prometheus ----------------
+
+
   prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
+    image: prom/prometheus
+    container_name: prometheus_container
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
     ports:
       - "9090:9090"
-    depends_on:
-      - monitor_model
-    networks:
-      - mlops
+    restart: unless-stopped
 
-  # ------------------------
-  # Grafana
-  # ------------------------
   grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+    image: grafana/grafana
+    container_name: grafana_container
     ports:
       - "3000:3000"
     depends_on:
       - prometheus
+    restart: unless-stopped
+
+  framingham_app:
+    build: .
+    container_name: framingham_app_container
+    command: uvicorn home_app:app --host 0.0.0.0 --port 8001 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+
+  # ---------------- Streamlit UI ----------------
+  streamlit:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    container_name: streamlit_container
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./streamlit_app:/app:rw
+      - mlflow_data:/app/mlflow
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    command: streamlit run /app/app.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      - mlflow
+      - mariadb
     networks:
       - mlops
 
-# ------------------------
-# Shared Volumes
-# ------------------------
 volumes:
-  postgres_data:
-  mlruns:
+  mariadb_data:
+  mlflow_data:
+  grafana_data:
+  prometheus_data:
 
-# ------------------------
-# Shared Network
-# ------------------------
 networks:
   mlops:
     driver: bridge

@@ -1,9 +1,7 @@
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_interval: 5s
 
 scrape_configs:
-  - job_name: 'framingham_app'
+  - job_name: 'framingham_model'
     static_configs:
-      - targets: ['172.17.0.1:8001']  # your Python metrics server
-
+      - targets: ['host.docker.internal:8001']  # Python metrics server on host

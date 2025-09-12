@@ -1,125 +1,274 @@
-# monitor.py
+import sys
 import os
-import pickle
+import time
+import logging
+from datetime import datetime
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 import mlflow
 from evidently.report import Report
 from evidently.metric_preset import DataDriftPreset
-from prometheus_client import Gauge, start_http_server
+from prometheus_client import start_http_server
 
-# ---------------- Prometheus Gauges ----------------
-accuracy_gauge = Gauge("model_accuracy", "Model Accuracy")
-precision_gauge = Gauge("model_precision", "Model Precision")
-recall_gauge = Gauge("model_recall", "Model Recall")
-f1_gauge = Gauge("model_f1", "Model F1 Score")
-roc_auc_gauge = Gauge("model_roc_auc", "Model ROC-AUC")
+# ----------------------------
+# Base directory setup
+# ----------------------------
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(BASE_DIR)
 
-METRICS_FILE = "/home/anish/airflow/dags/models/streamlit_app/metrics.pkl"
+from utils import load_pickle
+from monitoring.prometheus_metrics import (
+    model_accuracy,
+    model_precision,
+    model_recall,
+    model_f1,
+    model_roc_auc,
+    data_drift_detected,
+    concept_drift_detected
+)
 
-def load_pickle(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
+# ----------------------------
+# Logging
+# ----------------------------
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
+# ----------------------------
+# Paths
+# ----------------------------
+MONITOR_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(MONITOR_DIR, "data")
+MODELS_DIR = os.path.join(MONITOR_DIR, "models")
+REPORTS_DIR = os.path.join(MONITOR_DIR, "reports")
+MLFLOW_DB = "/home/anish/airflow/dags/mlflow.db"
+PIPELINE_PATH = os.path.join(MODELS_DIR, "final_pipeline.pkl")
+USER_PREDICTIONS_PATH = os.path.join(DATA_DIR, "user_predictions.pkl")
+
+# ----------------------------
+# MLflow connection
+# ----------------------------
+def connect_mlflow():
+    try:
+        mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB}")
+        mlflow.set_experiment("Framingham")
+        logger.info("✅ MLflow connected")
+    except Exception as e:
+        logger.error(f"❌ MLflow connection failed: {e}")
+
+# ----------------------------
+# Utilities
+# ----------------------------
+def ensure_dataframe(data, name="dataset"):
+    if isinstance(data, np.ndarray):
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        data = pd.DataFrame(data, columns=[f"feature_{i}" for i in range(data.shape[1])])
+        logger.info(f"ℹ️ Converted {name} from ndarray to DataFrame")
+    return data
+
+def check_files_exist(files):
+    missing = [f for f in files if not os.path.exists(f)]
+    if missing:
+        logger.error(f"❌ Missing files: {missing}")
+        return False
+    return True
+
+# ----------------------------
+# Monitoring functions
+# ----------------------------
 def monitor_model():
-    # ---------------- MLflow setup ----------------
-    mlflow.set_tracking_uri("sqlite:////home/anish/airflow/dags/mlflow.db")
-    mlflow.set_experiment("Framingham")
+    """Monitor model performance and update metrics"""
+    logger.info("🔍 Starting model monitoring...")
+    
+    critical_files = [PIPELINE_PATH,
+                      os.path.join(DATA_DIR, "X_test.pkl"),
+                      os.path.join(DATA_DIR, "y_test.pkl")]
+    if not check_files_exist(critical_files):
+        return False
 
-    # ---------------- Load trained pipeline ----------------
-    pipeline_path = '/home/anish/airflow/dags/models/final_pipeline.pkl'
-    if not os.path.exists(pipeline_path):
-        raise FileNotFoundError(f"Pipeline file not found: {pipeline_path}")
-
-    with open(pipeline_path, "rb") as f:
-        pipeline = pickle.load(f)
-
-    model = pipeline.get("model")
-    if model is None:
-        raise ValueError("No 'model' found in final_pipeline.pkl")
-
-    # ---------------- Load datasets ----------------
-    X_train = load_pickle("/home/anish/airflow/dags/data/X_train.pkl")
-    X_test = load_pickle("/home/anish/airflow/dags/data/X_test.pkl")
-    y_train = load_pickle("/home/anish/airflow/dags/data/y_train.pkl")
-    y_test = load_pickle("/home/anish/airflow/dags/data/y_test.pkl")
-
-    y_train = np.array(y_train).ravel()
-    y_test = np.array(y_test).ravel()
-
-    # ---------------- Predictions ----------------
-    preds_train = model.predict(X_train)
-    preds_test = model.predict(X_test)
     try:
-        pred_proba_test = model.predict_proba(X_test)[:, 1]
-    except Exception:
-        pred_proba_test = np.zeros_like(preds_test, dtype=float)
+        connect_mlflow()
+        pipeline = load_pickle(PIPELINE_PATH, "ML Pipeline")
+        model = pipeline.get("model")
+        if model is None:
+            raise ValueError("No 'model' found in pipeline")
 
-    # ---------------- Compute metrics ----------------
-    metrics = {
-        "accuracy": float(accuracy_score(y_test, preds_test)),
-        "precision": float(precision_score(y_test, preds_test, zero_division=0)),
-        "recall": float(recall_score(y_test, preds_test, zero_division=0)),
-        "f1": float(f1_score(y_test, preds_test, zero_division=0)),
-        "roc_auc": float(roc_auc_score(y_test, pred_proba_test)) if pred_proba_test.sum() != 0 else 0.0
-    }
+        X_test = ensure_dataframe(load_pickle(os.path.join(DATA_DIR, "X_test.pkl"), "X_test"))
+        y_test = np.array(load_pickle(os.path.join(DATA_DIR, "y_test.pkl"), "y_test")).ravel()
 
-    # ---------------- Log metrics to MLflow ----------------
-    with mlflow.start_run(run_name="model_monitoring"):
-        mlflow.log_metrics(metrics)
-        print(f"Logged metrics to MLflow: {metrics}")
+        preds = model.predict(X_test)
+        try:
+            pred_proba = model.predict_proba(X_test)[:, 1]
+        except Exception:
+            pred_proba = np.zeros_like(preds, dtype=float)
 
-    # ---------------- Save metrics for Prometheus ----------------
-    os.makedirs(os.path.dirname(METRICS_FILE), exist_ok=True)
-    with open(METRICS_FILE, "wb") as f:
-        pickle.dump(metrics, f)
-    print(f"✅ Metrics saved for Prometheus at {METRICS_FILE}")
+        metrics = {
+            "accuracy": float(accuracy_score(y_test, preds)),
+            "precision": float(precision_score(y_test, preds, zero_division=0)),
+            "recall": float(recall_score(y_test, preds, zero_division=0)),
+            "f1": float(f1_score(y_test, preds, zero_division=0)),
+            "roc_auc": float(roc_auc_score(y_test, pred_proba)) if pred_proba.sum() != 0 else 0.0
+        }
+        logger.info(f"✅ Model metrics: {metrics}")
 
-    # ---------------- Push metrics to Prometheus gauges ----------------
-    accuracy_gauge.set(metrics["accuracy"])
-    precision_gauge.set(metrics["precision"])
-    recall_gauge.set(metrics["recall"])
-    f1_gauge.set(metrics["f1"])
-    roc_auc_gauge.set(metrics["roc_auc"])
+        # MLflow logging
+        try:
+            with mlflow.start_run(run_name="model_monitoring"):
+                mlflow.log_metrics(metrics)
+        except Exception as e:
+            logger.warning(f"⚠️ MLflow logging failed: {e}")
 
-    # ---------------- Evidently Report ----------------
+        # Update Prometheus gauges
+        try:
+            model_accuracy.set(metrics["accuracy"])
+            model_precision.set(metrics["precision"])
+            model_recall.set(metrics["recall"])
+            model_f1.set(metrics["f1"])
+            model_roc_auc.set(metrics["roc_auc"])
+            logger.info("✅ Prometheus metrics updated")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to update Prometheus metrics: {e}")
+
+        return True
+    except Exception as e:
+        logger.error(f"❌ Model monitoring failed: {e}")
+        return False
+
+def monitor_data_drift():
+    """Monitor data drift and update metrics"""
+    logger.info("🔍 Starting data drift monitoring...")
+    
+    if not os.path.exists(USER_PREDICTIONS_PATH):
+        logger.info("No user predictions yet, skipping data drift")
+        try:
+            data_drift_detected.set(0)
+        except Exception:
+            pass
+        return True
+
     try:
-        X_train_with_target = X_train.copy()
-        X_train_with_target["target"] = y_train
-        X_train_with_target["prediction"] = preds_train
+        X_ref = ensure_dataframe(load_pickle(os.path.join(DATA_DIR, "X_test.pkl"), "X_test"))
+        user_preds = load_pickle(USER_PREDICTIONS_PATH, "User Predictions") or []
+        if not user_preds:
+            data_drift_detected.set(0)
+            return True
 
-        X_test_with_target = X_test.copy()
-        X_test_with_target["target"] = y_test
-        X_test_with_target["prediction"] = preds_test
+        user_data = pd.DataFrame([p["input"] for p in user_preds])
+        if user_data.empty:
+            data_drift_detected.set(0)
+            return True
 
         report = Report(metrics=[DataDriftPreset()])
-        report.run(reference_data=X_train_with_target, current_data=X_test_with_target)
+        report.run(reference_data=X_ref, current_data=user_data)
+        os.makedirs(REPORTS_DIR, exist_ok=True)
+        report_file = os.path.join(REPORTS_DIR, f"data_drift_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html")
+        report.save_html(report_file)
+        logger.info(f"✅ Data drift report saved: {report_file}")
 
-        os.makedirs('/home/anish/airflow/dags/reports', exist_ok=True)
-        report_path = f"/home/anish/airflow/dags/reports/evidently_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-        report.save_html(report_path)
-        print(f"✅ Evidently report saved at {report_path}")
-    except Exception as e:
-        print(f"⚠️ Failed to generate Evidently report: {e}")
-
-    # ---------------- Performance warning ----------------
-    if metrics["roc_auc"] < 0.70:
-        print(f"⚠️ Warning: ROC-AUC below threshold (0.70) – {metrics['roc_auc']:.4f}")
-    else:
-        print("✅ Model performance is satisfactory")
-
-if __name__ == "__main__":
-    # Start Prometheus metrics server
-    start_http_server(8001)
-    print("🚀 Prometheus metrics server running on :8001")
-
-    # Run monitoring every X seconds (like cronjob / service)
-    import time
-    while True:
+        # Check for drift in report
+        drift_detected = False
         try:
-            monitor_model()
+            report_dict = report.as_dict()
+            for metric in report_dict.get('metrics', []):
+                if 'result' in metric and metric['result'].get('drift_detected', False):
+                    drift_detected = True
+                    break
         except Exception as e:
-            print("❌ Monitoring error:", e)
-        time.sleep(60)  # Run every 1 minute
+            logger.warning(f"⚠️ Could not parse drift report: {e}")
+            drift_detected = False
+
+        try:
+            data_drift_detected.set(1 if drift_detected else 0)
+            logger.info(f"✅ Data drift status: {'Detected' if drift_detected else 'Not detected'}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to update drift metric: {e}")
+
+        try:
+            mlflow.log_metric("data_drift_detected", 1 if drift_detected else 0)
+        except Exception as e:
+            logger.warning(f"⚠️ MLflow logging failed: {e}")
+
+        return True
+    except Exception as e:
+        logger.error(f"❌ Data drift monitoring failed: {e}")
+        try:
+            data_drift_detected.set(0)
+        except Exception:
+            pass
+        return False
+
+def monitor_concept_drift():
+    """Monitor concept drift and update metrics"""
+    logger.info("🔍 Starting concept drift monitoring...")
+    
+    if not os.path.exists(USER_PREDICTIONS_PATH):
+        logger.info("No user predictions yet, skipping concept drift")
+        try:
+            concept_drift_detected.set(0)
+        except Exception:
+            pass
+        return True
+
+    try:
+        pipeline = load_pickle(PIPELINE_PATH, "ML Pipeline")
+        model = pipeline.get("model")
+        if model is None:
+            raise ValueError("No 'model' found in pipeline")
+
+        user_preds = load_pickle(USER_PREDICTIONS_PATH, "User Predictions") or []
+        if not user_preds:
+            concept_drift_detected.set(0)
+            return True
+
+        user_data = pd.DataFrame([p["input"] for p in user_preds])
+        user_labels = np.array([p["class"] for p in user_preds])
+        if user_data.empty or len(user_labels) == 0:
+            concept_drift_detected.set(0)
+            return True
+
+        preds = model.predict(user_data)
+        try:
+            pred_proba = model.predict_proba(user_data)[:, 1]
+        except Exception:
+            pred_proba = np.zeros_like(preds, dtype=float)
+
+        current_roc_auc = float(roc_auc_score(user_labels, pred_proba)) if pred_proba.sum() != 0 else 0.0
+
+        ROC_THRESHOLD = 0.5
+        drift_detected = current_roc_auc < ROC_THRESHOLD
+        
+        try:
+            concept_drift_detected.set(1 if drift_detected else 0)
+            logger.info(f"✅ Concept drift status: {'Detected' if drift_detected else 'Not detected'} (ROC-AUC: {current_roc_auc:.3f})")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to update concept drift metric: {e}")
+
+        try:
+            mlflow.log_metric("concept_drift_detected", 1 if drift_detected else 0)
+        except Exception as e:
+            logger.warning(f"⚠️ MLflow logging failed: {e}")
+
+        return True
+    except Exception as e:
+        logger.error(f"❌ Concept drift monitoring failed: {e}")
+        try:
+            concept_drift_detected.set(0)
+        except Exception:
+            pass
+        return False
+
+# ----------------------------
+# Main loop to start Prometheus server and monitor continuously
+# ----------------------------
+if __name__ == "__main__":
+    # Start Prometheus server once
+    start_http_server(8001)
+    logger.info("✅ Prometheus server running on :8001")
+
+    while True:
+        monitor_model()
+        monitor_data_drift()
+        monitor_concept_drift()
+        time.sleep(60)
