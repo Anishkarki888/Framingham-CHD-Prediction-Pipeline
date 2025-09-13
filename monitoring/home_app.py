@@ -16,7 +16,7 @@ STREAMLIT_DIR = os.path.join(BASE_DIR, "streamlit_app")
 APP_PATH = os.path.join(STREAMLIT_DIR, "app.py")
 DATA_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "data_drift.py")
 CONCEPT_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "concept_drift.py")
-MLFLOW_DB = os.path.join(BASE_DIR, "mlflow", "mlflow.db")
+MLFLOW_DB = os.path.join(BASE_DIR, "mlflow", "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db")
 
 # ------------------------------
 # Ports

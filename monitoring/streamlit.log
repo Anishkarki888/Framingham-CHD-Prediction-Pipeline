@@ -1,1 +1,16 @@
-2025-09-13 00:37:55.303 Port 8501 is already in use
+
+  You can now view your Streamlit app in your browser.
+
+  URL: http://0.0.0.0:8501
+
+2025-09-13 22:03:10,469 - __main__ - INFO - ✅ Prometheus metrics server started on :8002
+2025-09-13 22:03:12,019 - utils - INFO - Loaded ML Pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl
+2025-09-13 22:03:12,019 - __main__ - INFO - ✅ Loaded pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl
+2025-09-13 22:03:12,827 - alembic.runtime.migration - INFO - Context impl SQLiteImpl.
+2025-09-13 22:03:12,828 - alembic.runtime.migration - INFO - Will assume non-transactional DDL.
+2025-09-13 22:03:33,691 - __main__ - WARNING - Could not start Prometheus metrics server on :8002 -> [Errno 98] Address already in use
+2025-09-13 22:03:33,718 - utils - INFO - Loaded ML Pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl
+2025-09-13 22:03:33,718 - __main__ - INFO - ✅ Loaded pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl
+2025-09-13 22:03:36,416 - __main__ - WARNING - Could not start Prometheus metrics server on :8002 -> [Errno 98] Address already in use
+2025-09-13 22:03:36,431 - utils - INFO - Loaded ML Pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl
+2025-09-13 22:03:36,432 - __main__ - INFO - ✅ Loaded pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl

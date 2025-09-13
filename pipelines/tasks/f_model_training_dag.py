@@ -2,14 +2,16 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from utils import load_df, store_df, save_pickle, logger, MODEL_DIR, make_redis_client
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report
+from sklearn.metrics import classification_report, precision_score,recall_score,f1_score,roc_auc_score, precision_recall_curve
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from catboost import CatBoostClassifier
+from imblearn.combine import SMOTEENN
 import optuna
 import mlflow
 import mlflow.sklearn
 from mlflow.models.signature import infer_signature
 from prometheus_client import Gauge
+import numpy as np
 import pandas as pd
 import os
 
@@ -23,7 +25,7 @@ PROM_GAUGES = {
 }
 
 # MLflow setup
-MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db")
+MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/mlflow.db")
 mlflow.set_tracking_uri(f"sqlite:////{MLFLOW_DB_PATH}")
 mlflow.set_experiment("Framingham")
 
@@ -38,7 +40,7 @@ default_args = {
 dag = DAG(
     "model_training",
     default_args=default_args,
-    description="Tunes and trains CatBoost model using validated preprocessed data",
+    description="Tunes and trains CatBoost model using validated preprocessed data (with SMOTEENN + threshold tuning)",
     start_date=datetime(2025, 8, 24),
     catchup=False,
     schedule_interval=None,
@@ -52,12 +54,18 @@ def hyperparameter_tuning(**kwargs):
     make_redis_client()
     
     try:
+        # Load training data
         X_train = load_df("X_train")
         y_train = load_df("y_train").values.ravel()
+        
+        # Balance dataset using SMOTEENN
+        smote_enn = SMOTEENN(random_state=42)
+        X_train_res, y_train_res = smote_enn.fit_resample(X_train, y_train)
 
+        # Define Optuna objective
         def objective(trial):
             params = {
-                'iterations': 100,
+                'iterations': trial.suggest_int('iterations', 200, 800),
                 'depth': trial.suggest_int('depth', 4, 10),
                 'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
                 'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1, 10),
@@ -65,29 +73,21 @@ def hyperparameter_tuning(**kwargs):
                 'verbose': 0,
                 'random_state': 42
             }
-            model = CatBoostClassifier(**params, class_weights=[1, 3000/900])
+            model = CatBoostClassifier(**params)
             skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            score = cross_val_score(model, X_train, y_train, cv=skf, scoring='roc_auc', n_jobs=1).mean()
-            
-            with mlflow.start_run(nested=True):
-                mlflow.log_params(params)
-                mlflow.log_metric("roc_auc", float(score))
-            
+            score = cross_val_score(model, X_train_res, y_train_res, cv=skf, scoring='roc_auc', n_jobs=1).mean()
             return score
 
+        # Run Optuna study
         with mlflow.start_run(run_name="catboost_optuna"):
             study = optuna.create_study(direction='maximize')
-            study.optimize(objective, n_trials=20)
+            study.optimize(objective, n_trials=30)  # 30 for speed, can increase
             best_params = study.best_params
-            
-            # Store best parameters in Redis for downstream use
             store_df("best_catboost_params", pd.DataFrame([best_params]))
-            
             mlflow.log_params(best_params)
             mlflow.log_metric("best_roc_auc", float(study.best_value))
-            
             logger.info("=== HYPERPARAMETER TUNING COMPLETED, Best ROC-AUC=%s ===", study.best_value)
-            
+
     except Exception as e:
         logger.error(f"❌ Hyperparameter tuning failed: {e}")
         raise
@@ -98,7 +98,7 @@ def final_model_training(**kwargs):
     make_redis_client()
     
     try:
-        # Load data and best parameters from Redis
+        # Load best parameters + train/test data
         best_params_df = load_df("best_catboost_params")
         best_params = best_params_df.iloc[0].to_dict()
         X_train = load_df("X_train")
@@ -106,38 +106,51 @@ def final_model_training(**kwargs):
         X_test = load_df("X_test")
         y_test = load_df("y_test").values.ravel()
 
+        # Balance dataset again for final training
+        smote_enn = SMOTEENN(random_state=42)
+        X_train_res, y_train_res = smote_enn.fit_resample(X_train, y_train)
+
         with mlflow.start_run(run_name="final_catboost_model"):
-            model = CatBoostClassifier(**best_params, class_weights=[1, 3000/900])
-            model.fit(X_train, y_train)
-            
-            y_pred = model.predict(X_test)
+            # Train final CatBoost model
+            model = CatBoostClassifier(**best_params)
+            model.fit(X_train_res, y_train_res)
+
+            # Predictions
             y_pred_proba = model.predict_proba(X_test)[:, 1]
             
+    
+           
+            best_thresh = 0.3
+            y_pred = (y_pred_proba >= best_thresh).astype(int)
+
+            # Metrics
             metrics = {
-                'accuracy': float(accuracy_score(y_test, y_pred)),
-                'precision': float(precision_score(y_test, y_pred, zero_division=0)),
-                'recall': float(recall_score(y_test, y_pred, zero_division=0)),
-                'f1': float(f1_score(y_test, y_pred, zero_division=0)),
+                'accuracy': float((y_test == y_pred).mean()),
+                'precision': float(np.round(precision_score(y_test, y_pred, zero_division=0), 3)),
+                'recall': float(np.round(recall_score(y_test, y_pred, zero_division=0), 3)),
+                'f1': float(np.round(f1_score(y_test, y_pred, zero_division=0), 3)),
                 'roc_auc': float(roc_auc_score(y_test, y_pred_proba))
             }
-            
-            # Update Prometheus
+
+            # Prometheus
             for metric_name, value in metrics.items():
                 PROM_GAUGES[metric_name].labels(dag_id=kwargs['dag'].dag_id).set(value)
-            
+
+            # MLflow
             mlflow.log_metrics(metrics)
             mlflow.log_params(best_params)
+            mlflow.log_param("best_threshold", float(best_thresh))
             
-            # Save model to MLflow & locally
-            signature = infer_signature(X_train, model.predict(X_train))
-            mlflow.sklearn.log_model(model, "catboost_best_model", signature=signature, input_example=X_train.iloc[:1])
+            signature = infer_signature(X_train_res, model.predict(X_train_res))
+            mlflow.sklearn.log_model(model, "catboost_best_model", signature=signature, input_example=X_train_res.iloc[:1])
+            
             save_pickle(model, os.path.join(MODEL_DIR, 'best_catboost_model.pkl'))
-            
+
             logger.info("Classification Report:\n%s", classification_report(y_test, y_pred))
             logger.info(f"✅ Final Model Metrics: {metrics}")
 
         logger.info("=== FINAL MODEL TRAINING COMPLETED ===")
-        
+
     except Exception as e:
         logger.error(f"❌ Final model training failed: {e}")
         raise
@@ -156,5 +169,5 @@ final_train_task = PythonOperator(
     dag=dag,
 )
 
-# Task dependency
+# Dependencies
 tune_task >> final_train_task
