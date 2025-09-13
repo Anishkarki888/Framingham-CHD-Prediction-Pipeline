@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # ---------------- Paths ----------------
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MODEL_PATH = os.path.join(BASE_DIR, "models/final_pipeline.pkl")
-MLFLOW_DB = "/home/anish/airflow/dags/mlflow.db"
+MLFLOW_DB = "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db"
 EXPERIMENT_NAME = "Framingham"
 
 mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB}")

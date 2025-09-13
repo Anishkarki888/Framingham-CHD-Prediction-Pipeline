@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from utils import load_df, store_df, save_pickle, logger, MODEL_DIR
+from utils import load_df, store_df, save_pickle, logger, MODEL_DIR, make_redis_client
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from catboost import CatBoostClassifier
@@ -13,7 +13,7 @@ from prometheus_client import Gauge
 import pandas as pd
 import os
 
-# FIXED: Use different metric names to avoid conflicts with monitoring metrics
+# Prometheus metrics
 PROM_GAUGES = {
     "accuracy": Gauge("training_model_accuracy", "Training Model Accuracy", ["dag_id"]),
     "precision": Gauge("training_model_precision", "Training Model Precision", ["dag_id"]),
@@ -23,7 +23,7 @@ PROM_GAUGES = {
 }
 
 # MLflow setup
-MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/mlflow.db")
+MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db")
 mlflow.set_tracking_uri(f"sqlite:////{MLFLOW_DB_PATH}")
 mlflow.set_experiment("Framingham")
 
@@ -38,7 +38,7 @@ default_args = {
 dag = DAG(
     "model_training",
     default_args=default_args,
-    description="Tunes and trains CatBoost model for Framingham dataset",
+    description="Tunes and trains CatBoost model using validated preprocessed data",
     start_date=datetime(2025, 8, 24),
     catchup=False,
     schedule_interval=None,
@@ -47,7 +47,9 @@ dag = DAG(
 )
 
 def hyperparameter_tuning(**kwargs):
-    logger.info("=== STARTING HYPERPARAM TUNING ===")
+    logger.info("=== STARTING HYPERPARAMETER TUNING ===")
+    
+    make_redis_client()
     
     try:
         X_train = load_df("X_train")
@@ -78,14 +80,13 @@ def hyperparameter_tuning(**kwargs):
             study.optimize(objective, n_trials=20)
             best_params = study.best_params
             
-            # Store best parameters
+            # Store best parameters in Redis for downstream use
             store_df("best_catboost_params", pd.DataFrame([best_params]))
             
-            # Log to MLflow
             mlflow.log_params(best_params)
             mlflow.log_metric("best_roc_auc", float(study.best_value))
             
-            logger.info("=== HYPERPARAM TUNING COMPLETED, Best ROC-AUC=%s ===", study.best_value)
+            logger.info("=== HYPERPARAMETER TUNING COMPLETED, Best ROC-AUC=%s ===", study.best_value)
             
     except Exception as e:
         logger.error(f"❌ Hyperparameter tuning failed: {e}")
@@ -94,8 +95,10 @@ def hyperparameter_tuning(**kwargs):
 def final_model_training(**kwargs):
     logger.info("=== STARTING FINAL MODEL TRAINING ===")
     
+    make_redis_client()
+    
     try:
-        # Load best parameters and data
+        # Load data and best parameters from Redis
         best_params_df = load_df("best_catboost_params")
         best_params = best_params_df.iloc[0].to_dict()
         X_train = load_df("X_train")
@@ -104,15 +107,12 @@ def final_model_training(**kwargs):
         y_test = load_df("y_test").values.ravel()
 
         with mlflow.start_run(run_name="final_catboost_model"):
-            # Train final model
             model = CatBoostClassifier(**best_params, class_weights=[1, 3000/900])
             model.fit(X_train, y_train)
             
-            # Make predictions
             y_pred = model.predict(X_test)
             y_pred_proba = model.predict_proba(X_test)[:, 1]
             
-            # Calculate metrics
             metrics = {
                 'accuracy': float(accuracy_score(y_test, y_pred)),
                 'precision': float(precision_score(y_test, y_pred, zero_division=0)),
@@ -121,41 +121,20 @@ def final_model_training(**kwargs):
                 'roc_auc': float(roc_auc_score(y_test, y_pred_proba))
             }
             
-            # Update Prometheus metrics (with training_ prefix to avoid conflicts)
-            try:
-                for metric_name, value in metrics.items():
-                    PROM_GAUGES[metric_name].labels(dag_id=kwargs['dag'].dag_id).set(value)
-                logger.info("✅ Training metrics updated in Prometheus")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to update Prometheus metrics: {e}")
+            # Update Prometheus
+            for metric_name, value in metrics.items():
+                PROM_GAUGES[metric_name].labels(dag_id=kwargs['dag'].dag_id).set(value)
             
-            # Log to MLflow
             mlflow.log_metrics(metrics)
             mlflow.log_params(best_params)
             
-            # Save model to MLflow
-            try:
-                signature = infer_signature(X_train, model.predict(X_train))
-                mlflow.sklearn.log_model(
-                    model, 
-                    "catboost_best_model", 
-                    signature=signature, 
-                    input_example=X_train.iloc[:1]
-                )
-            except Exception as e:
-                logger.warning(f"Could not infer signature for final model: {e}")
-                mlflow.sklearn.log_model(
-                    model, 
-                    "catboost_best_model", 
-                    input_example=X_train.iloc[:1]
-                )
-            
-            # Save model locally
+            # Save model to MLflow & locally
+            signature = infer_signature(X_train, model.predict(X_train))
+            mlflow.sklearn.log_model(model, "catboost_best_model", signature=signature, input_example=X_train.iloc[:1])
             save_pickle(model, os.path.join(MODEL_DIR, 'best_catboost_model.pkl'))
             
-            # Print classification report
             logger.info("Classification Report:\n%s", classification_report(y_test, y_pred))
-            logger.info(f"✅ Model Metrics: {metrics}")
+            logger.info(f"✅ Final Model Metrics: {metrics}")
 
         logger.info("=== FINAL MODEL TRAINING COMPLETED ===")
         

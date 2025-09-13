@@ -1,0 +1,13 @@
+[2025-09-13 00:37:56 +0545] [44889] [INFO] Starting gunicorn 23.0.0
+[2025-09-13 00:37:56 +0545] [44889] [ERROR] Connection in use: ('0.0.0.0', 5050)
+[2025-09-13 00:37:56 +0545] [44889] [ERROR] connection to ('0.0.0.0', 5050) failed: [Errno 98] Address already in use
+[2025-09-13 00:37:57 +0545] [44889] [ERROR] Connection in use: ('0.0.0.0', 5050)
+[2025-09-13 00:37:57 +0545] [44889] [ERROR] connection to ('0.0.0.0', 5050) failed: [Errno 98] Address already in use
+[2025-09-13 00:37:58 +0545] [4488[2025-09-13 01:03:03 +0545] [6534] [CRITICAL] WORKER TIMEOUT (pid:6592)
+45] [44889] [ERROR] connection to ('0.0.0.0', 5050) failed: [Errno 98] Address already in use
+[2025-09-13 00:37:59 +0545] [44889] [ERROR] Connection in use: ('0.0.0.0', 5050)
+[2025-09-13 00:37:59 +0545] [44889] [ERROR] connection to ('0.0.0.0', 5050) failed: [Errno 98] Address already in use
+[2025-09-13 00:38:00 +0545] [44889] [ERROR] Connection in use: ('0.0.0.0', 5050)
+[2025-09-13 00:38:00 +0545] [44889] [ERROR] connection to ('0.0.0.0', 5050) failed: [Errno 98] Address already in use
+[2025-09-13 00:38:01 +0545] [44889] [ERROR] Can't connect to ('0.0.0.0', 5050)
+Running the mlflow server failed. Please see the logs above for details.

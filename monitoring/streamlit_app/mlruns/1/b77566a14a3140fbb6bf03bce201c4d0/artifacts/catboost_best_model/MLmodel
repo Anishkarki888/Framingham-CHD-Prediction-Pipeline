@@ -1,0 +1,39 @@
+artifact_path: catboost_best_model
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.8.20
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.1.3
+mlflow_version: 2.17.2
+model_size_bytes: 4192043
+model_uuid: 6c4949d1123c41f4bacb41fa61e51541
+run_id: b77566a14a3140fbb6bf03bce201c4d0
+saved_input_example_info:
+  artifact_path: input_example.json
+  pandas_orient: split
+  serving_input_path: serving_input_example.json
+  type: dataframe
+signature:
+  inputs: '[{"type": "long", "name": "male", "required": true}, {"type": "long", "name":
+    "age", "required": true}, {"type": "long", "name": "education", "required": true},
+    {"type": "long", "name": "currentSmoker", "required": true}, {"type": "double",
+    "name": "cigsPerDay", "required": true}, {"type": "double", "name": "BPMeds",
+    "required": true}, {"type": "long", "name": "prevalentStroke", "required": true},
+    {"type": "long", "name": "prevalentHyp", "required": true}, {"type": "long", "name":
+    "diabetes", "required": true}, {"type": "double", "name": "totChol", "required":
+    true}, {"type": "double", "name": "sysBP", "required": true}, {"type": "double",
+    "name": "diaBP", "required": true}, {"type": "double", "name": "BMI", "required":
+    true}, {"type": "double", "name": "heartRate", "required": true}, {"type": "double",
+    "name": "glucose", "required": true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "int64", "shape": [-1]}}]'
+  params: null
+utc_time_created: '2025-09-12 18:54:03.993945'

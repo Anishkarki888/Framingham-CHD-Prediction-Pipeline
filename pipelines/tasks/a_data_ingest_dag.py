@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from utils import get_engine_with_retry, store_df, logger
+from utils import get_engine_with_retry, store_df, logger, make_redis_client, redis_conn
 import pandas as pd
 import os
+import time
 
 # -------------------------------
 # Default DAG args
@@ -16,9 +17,6 @@ default_args = {
     'retry_delay': timedelta(minutes=5)
 }
 
-# -------------------------------
-# DAG definition
-# -------------------------------
 dag = DAG(
     "data_ingest",
     default_args=default_args,
@@ -36,14 +34,14 @@ dag = DAG(
 def data_ingest(**kwargs):
     logger.info("=== STARTING DATA INGEST (ELT: Load RAW) ===")
     
-    # Multiple paths to check
-    paths = [
-        '/home/anish/framingham.csv',
-        './framingham.csv',
-        '/tmp/framingham.csv',
-        '/home/anish/airflow/dags/framingham.csv'
-    ]
-    
+    # Initialize Redis client
+    make_redis_client()
+    r = redis_conn()
+    if not r:
+        raise ValueError("❌ Redis client could not be initialized")
+
+    # Find dataset
+    paths = ['/home/anish/airflow/dags/framingham.csv']
     df = None
     for p in paths:
         if os.path.exists(p):
@@ -57,10 +55,21 @@ def data_ingest(**kwargs):
     # Add unique patient ID
     df['patient_id'] = range(1, len(df) + 1)
     
-    # Persist RAW snapshot (Redis + local fallback)
+    # Persist to Redis + local
     store_df("framingham_raw", df)
-    
-    # Write staging to MariaDB
+
+    # Confirm Redis key exists before finishing
+    retries = 5
+    for i in range(retries):
+        if r.exists("framingham_raw"):
+            logger.info("✅ 'framingham_raw' successfully stored in Redis")
+            break
+        logger.warning(f"'framingham_raw' not yet in Redis, retrying... ({i+1}/{retries})")
+        time.sleep(2)
+    else:
+        raise ValueError("❌ Failed to store 'framingham_raw' in Redis after retries")
+
+    # Write to MariaDB staging
     try:
         engine = get_engine_with_retry()
         with engine.begin() as conn:
@@ -72,7 +81,7 @@ def data_ingest(**kwargs):
     logger.info("=== DATA INGEST COMPLETED ===")
 
 # -------------------------------
-# Airflow PythonOperator
+# DAG task
 # -------------------------------
 ingest_task = PythonOperator(
     task_id="data_ingest",

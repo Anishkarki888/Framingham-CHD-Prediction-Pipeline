@@ -10,24 +10,26 @@ import os
 # ----------------------------
 sys.path.append("/home/anish/airflow/dags/monitoring")
 
-# Import monitoring functions
+# ----------------------------
+# Wrapper functions for DAG tasks
+# ----------------------------
 def run_monitor_model():
-    """Wrapper function to run model monitoring"""
-    from monitor_model import monitor_model
-    return monitor_model()
+    """Launch the main user input Streamlit app for monitoring"""
+    from monitor_model import run_streamlit_app, APP_PATH, APP_PORT
+    run_streamlit_app(APP_PATH, APP_PORT)
 
 def run_monitor_data_drift():
-    """Wrapper function to run data drift monitoring"""
-    from monitor_model import monitor_data_drift
-    return monitor_data_drift()
+    """Launch the data drift monitoring Streamlit app"""
+    from monitor_model import run_streamlit_app, DATA_DRIFT_PATH, DATA_DRIFT_PORT
+    run_streamlit_app(DATA_DRIFT_PATH, DATA_DRIFT_PORT)
 
 def run_monitor_concept_drift():
-    """Wrapper function to run concept drift monitoring"""
-    from monitor_model import monitor_concept_drift
-    return monitor_concept_drift()
+    """Launch the concept drift monitoring Streamlit app"""
+    from monitor_model import run_streamlit_app, CONCEPT_DRIFT_PATH, CONCEPT_DRIFT_PORT
+    run_streamlit_app(CONCEPT_DRIFT_PATH, CONCEPT_DRIFT_PORT)
 
 # ----------------------------
-# Default arguments
+# Default DAG arguments
 # ----------------------------
 default_args = {
     'owner': 'anish',
@@ -52,26 +54,25 @@ with DAG(
     is_paused_upon_creation=False
 ) as dag:
     
-    # 1️⃣ Model performance monitoring
+
     monitor_model_task = PythonOperator(
-        task_id='monitor_model_task',
-        python_callable=run_monitor_model,
-        doc_md="Monitor model performance metrics (accuracy, precision, recall, f1, roc_auc)"
+        task_id="monitor_model_task",
+        python_callable=run_monitor_model,  # <- your wrapper launching Streamlit
+        dag=dag
     )
-    
-    # 2️⃣ Data drift monitoring
+
     monitor_data_drift_task = PythonOperator(
-        task_id='monitor_data_drift_task',
+        task_id="monitor_data_drift_task",
         python_callable=run_monitor_data_drift,
-        doc_md="Monitor for data drift using Evidently"
+        dag=dag
     )
-    
-    # 3️⃣ Concept drift monitoring
+
     monitor_concept_drift_task = PythonOperator(
-        task_id='monitor_concept_drift_task',
+        task_id="monitor_concept_drift_task",
         python_callable=run_monitor_concept_drift,
-        doc_md="Monitor for concept drift based on model performance"
+        dag=dag
     )
+
 
     # ----------------------------
     # Task dependencies
