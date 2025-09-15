@@ -5,6 +5,7 @@ import webbrowser
 import os
 import time
 import streamlit as st
+import pickle
 
 # ------------------------------
 # Paths
@@ -19,6 +20,9 @@ CONCEPT_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "concept_drift.py")
 
 # MLflow DB
 MLFLOW_DB = os.path.join(BASE_DIR, "mlflow.db")
+
+# Concept drift results (for AUC monitoring)
+CONCEPT_DRIFT_RESULTS = os.path.join(BASE_DIR, "concept_drift_results.pkl")
 
 # ------------------------------
 # Ports
@@ -35,10 +39,7 @@ MLFLOW_PORT = 5000
 # Utility functions
 # ------------------------------
 def run_streamlit_app(path: str, port: int, extra_env=None):
-    """
-    Run a Streamlit app in a separate thread, non-blocking.
-    Opens app in default web browser automatically.
-    """
+    """Run a Streamlit app in a separate thread, non-blocking."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"Streamlit app not found: {path}")
 
@@ -103,6 +104,23 @@ def start_docker_container(container_name: str, url: str):
         webbrowser.open(url)
     except Exception as e:
         st.error(f"Failed to start {container_name}: {e}")
+
+
+# ------------------------------
+# Concept drift AUC utilities
+# ------------------------------
+def get_current_auc() -> float:
+    """Return the latest AUC from concept drift monitoring."""
+    if os.path.exists(CONCEPT_DRIFT_RESULTS):
+        with open(CONCEPT_DRIFT_RESULTS, "rb") as f:
+            auc_score = pickle.load(f)
+        return auc_score
+    return None
+
+def save_current_auc(auc_score: float):
+    """Save the current AUC after concept drift computation."""
+    with open(CONCEPT_DRIFT_RESULTS, "wb") as f:
+        pickle.dump(auc_score, f)
 
 
 # ------------------------------
