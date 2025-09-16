@@ -8,7 +8,6 @@ import mlflow.sklearn
 import tempfile
 import json
 import logging
-from mlflow.tracking import MlflowClient
 from pydantic import BaseModel, Field
 from prometheus_client import Gauge, start_http_server
 
@@ -23,10 +22,7 @@ logger = logging.getLogger(__name__)
 # ---------------- Paths ----------------
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MODEL_PATH = os.path.join(BASE_DIR, "models/final_pipeline.pkl")
-MLFLOW_DB = "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db"
-EXPERIMENT_NAME = "Framingham"
-
-mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB}")
+LATEST_METRICS_PATH = os.path.join(BASE_DIR, "models/latest_metrics.json")
 
 # ---------------- Prometheus setup ----------------
 PROM_PORT = 8002
@@ -54,38 +50,23 @@ class PatientInput(BaseModel):
     heartRate: int = Field(..., ge=40, le=150)
     glucose: float = Field(..., ge=40.0, le=400.0)
 
-# ---------------- Function to fetch model metrics from MLflow ----------------
-def get_model_metrics():
+# ---------------- Fetch latest model metrics ----------------
+def get_latest_metrics():
     try:
-        if not os.path.exists(MLFLOW_DB):
-            logger.error("MLflow database not found")
+        if os.path.exists(LATEST_METRICS_PATH):
+            with open(LATEST_METRICS_PATH, "r") as f:
+                metrics = json.load(f)
+            accuracy = metrics.get("accuracy", None)
+            precision = metrics.get("precision", None)
+            return accuracy, precision
+        else:
+            logger.warning(f"{LATEST_METRICS_PATH} not found. Metrics unavailable.")
             return None, None
-
-        client = MlflowClient(tracking_uri=f"sqlite:///{MLFLOW_DB}")
-        experiment = client.get_experiment_by_name(EXPERIMENT_NAME)
-        if not experiment:
-            logger.error(f"Experiment '{EXPERIMENT_NAME}' not found")
-            return None, None
-
-        run_names = ["final_catboost_model", "catboost_optuna", "catboost_default"]
-        for run_name in run_names:
-            runs = client.search_runs(
-                experiment_ids=[experiment.experiment_id],
-                filter_string=f"attributes.run_name = '{run_name}'",
-                order_by=["metrics.roc_auc DESC"],
-                max_results=1
-            )
-            if runs:
-                run = runs[0]
-                metrics = run.data.metrics
-                accuracy = metrics.get("accuracy", None)
-                precision = metrics.get("precision", None)
-                if accuracy is not None and precision is not None:
-                    return accuracy, precision
-        return None, None
     except Exception as e:
-        logger.error(f"Failed to fetch metrics from MLflow: {str(e)}")
+        logger.error(f"Failed to load latest metrics: {str(e)}")
         return None, None
+
+accuracy, precision = get_latest_metrics()
 
 # ---------------- Load trained pipeline ----------------
 try:
@@ -97,9 +78,6 @@ except Exception as e:
     st.error(f"Failed to load model pipeline: {str(e)}")
     logger.error(f"Failed to load pipeline: {str(e)}")
     st.stop()
-
-# ---------------- Fetch model metrics ----------------
-accuracy, precision = get_model_metrics()
 
 # ---------------- Streamlit page setup ----------------
 st.set_page_config(
@@ -160,7 +138,7 @@ if submitted:
     if accuracy is not None and precision is not None:
         st.write(f"**Algorithm:** CatBoost Classifier  \n**Accuracy:** {accuracy:.4f}  \n**Precision:** {precision:.4f}")
     else:
-        st.warning("Unable to fetch model metrics from MLflow.")
+        st.warning("Unable to fetch model metrics from latest_metrics.json.")
         st.write("**Algorithm:** CatBoost Classifier  \n**Accuracy:** N/A  \n**Precision:** N/A")
 
     try:
@@ -191,7 +169,7 @@ if submitted:
             df_input[scaler_cols] = scaler.transform(df_input[scaler_cols])
 
             # ---------------- MLflow logging ----------------
-            mlflow.set_experiment(EXPERIMENT_NAME)
+            mlflow.set_experiment("Framingham")
             with mlflow.start_run(run_name=f"user_prediction_{username}") as run:
                 for k, v in input_dict.items():
                     mlflow.log_param(k, v)

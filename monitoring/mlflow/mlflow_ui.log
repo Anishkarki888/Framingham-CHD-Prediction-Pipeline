@@ -1,7 +1,21 @@
-[2025-09-14 22:28:17 +0545] [25735] [INFO] Starting gunicorn 23.0.0
-[2025-09-14 22:28:17 +0545] [25735] [INFO] Listening at: http://0.0.0.0:5050 (25735)
-[2025-09-14 22:28:17 +0545] [25735] [INFO] Using worker: sync
-[2025-09-14 22:28:17 +0545] [25742] [INFO] Booting worker with pid: 25742
-[2025-09-14 22:28:17 +0545] [25743] [INFO] Booting worker with pid: 25743
-[2025-09-14 22:28:17 +0545] [25763] [INFO] Booting worker with pid: 25763
-[2025-09-14 22:28:18 +0545] [25764] [INFO] Booting worker with pid: 25764
+[2025-09-16 00:55:54 +0545] [101323] [INFO] Starting gunicorn 23.0.0
+[2025-09-16 00:55:54 +0545] [101323] [INFO] Listening at: http://0.0.0.0:5050 (101323)
+[2025-09-16 00:55:54 +0545] [101323] [INFO] Using worker: sync
+[2025-09-16 00:55:54 +0545] [101325] [INFO] Booting worker with pid: 101325
+[2025-09-16 00:55:54 +0545] [101326] [INFO] Booting worker with pid: 101326
+[2025-09-16 00:55:54 +0545] [101327] [INFO] Booting worker with pid: 101327
+[2025-09-16 00:55:54 +0545] [101328] [INFO] Booting worker with pid: 101328
+[2025-09-16 10:54:24 +0545] [101323] [CRITICAL] WORKER TIMEOUT (pid:101328)
+[2025-09-16 10:54:24 +0545] [101328] [INFO] Worker exiting (pid: 101328)
+[2025-09-16 10:54:25 +0545] [101323] [CRITICAL] WORKER TIMEOUT (pid:101325)
+[2025-09-16 10:54:25 +0545] [101323] [CRITICAL] WORKER TIMEOUT (pid:101326)
+[2025-09-16 10:54:25 +0545] [101323] [CRITICAL] WORKER TIMEOUT (pid:101327)
+[2025-09-16 10:54:25 +0545] [101326] [INFO] Worker exiting (pid: 101326)
+[2025-09-16 10:54:25 +0545] [101323] [ERROR] Worker (pid:101328) was sent SIGKILL! Perhaps out of memory?
+[2025-09-16 10:54:25 +0545] [106244] [INFO] Booting worker with pid: 106244
+[2025-09-16 10:54:25 +0545] [101323] [ERROR] Worker (pid:101326) was sent SIGKILL! Perhaps out of memory?
+[2025-09-16 10:54:25 +0545] [101323] [ERROR] Worker (pid:101327) was sent SIGKILL! Perhaps out of memory?
+[2025-09-16 10:54:25 +0545] [101323] [ERROR] Worker (pid:101325) was sent SIGKILL! Perhaps out of memory?
+[2025-09-16 10:54:25 +0545] [106245] [INFO] Booting worker with pid: 106245
+[2025-09-16 10:54:25 +0545] [106246] [INFO] Booting worker with pid: 106246
+[2025-09-16 10:54:25 +0545] [106247] [INFO] Booting worker with pid: 106247

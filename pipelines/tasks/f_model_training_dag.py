@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from utils import load_df, store_df, save_pickle, logger, MODEL_DIR, make_redis_client
-from sklearn.metrics import classification_report, precision_score,recall_score,f1_score,roc_auc_score, precision_recall_curve
+from sklearn.metrics import classification_report, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from catboost import CatBoostClassifier
 from imblearn.combine import SMOTEENN
@@ -14,6 +14,7 @@ from prometheus_client import Gauge
 import numpy as np
 import pandas as pd
 import os
+import json
 
 # Prometheus metrics
 PROM_GAUGES = {
@@ -25,9 +26,12 @@ PROM_GAUGES = {
 }
 
 # MLflow setup
-MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/mlflow.db")
+MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db")
 mlflow.set_tracking_uri(f"sqlite:////{MLFLOW_DB_PATH}")
 mlflow.set_experiment("Framingham")
+
+# Metrics file path for latest metrics
+LATEST_METRICS_FILE = os.path.join(MODEL_DIR, "latest_metrics.json")
 
 default_args = {
     'owner': 'Anish',
@@ -50,19 +54,13 @@ dag = DAG(
 
 def hyperparameter_tuning(**kwargs):
     logger.info("=== STARTING HYPERPARAMETER TUNING ===")
-    
     make_redis_client()
-    
     try:
-        # Load training data
         X_train = load_df("X_train")
         y_train = load_df("y_train").values.ravel()
-        
-        # Balance dataset using SMOTEENN
         smote_enn = SMOTEENN(random_state=42)
         X_train_res, y_train_res = smote_enn.fit_resample(X_train, y_train)
 
-        # Define Optuna objective
         def objective(trial):
             params = {
                 'iterations': trial.suggest_int('iterations', 200, 800),
@@ -78,10 +76,9 @@ def hyperparameter_tuning(**kwargs):
             score = cross_val_score(model, X_train_res, y_train_res, cv=skf, scoring='roc_auc', n_jobs=1).mean()
             return score
 
-        # Run Optuna study
         with mlflow.start_run(run_name="catboost_optuna"):
             study = optuna.create_study(direction='maximize')
-            study.optimize(objective, n_trials=30)  # 30 for speed, can increase
+            study.optimize(objective, n_trials=30)
             best_params = study.best_params
             store_df("best_catboost_params", pd.DataFrame([best_params]))
             mlflow.log_params(best_params)
@@ -89,16 +86,13 @@ def hyperparameter_tuning(**kwargs):
             logger.info("=== HYPERPARAMETER TUNING COMPLETED, Best ROC-AUC=%s ===", study.best_value)
 
     except Exception as e:
-        logger.error(f"❌ Hyperparameter tuning failed: {e}")
+        logger.error(f"Hyperparameter tuning failed: {e}")
         raise
 
 def final_model_training(**kwargs):
     logger.info("=== STARTING FINAL MODEL TRAINING ===")
-    
     make_redis_client()
-    
     try:
-        # Load best parameters + train/test data
         best_params_df = load_df("best_catboost_params")
         best_params = best_params_df.iloc[0].to_dict()
         X_train = load_df("X_train")
@@ -106,24 +100,17 @@ def final_model_training(**kwargs):
         X_test = load_df("X_test")
         y_test = load_df("y_test").values.ravel()
 
-        # Balance dataset again for final training
         smote_enn = SMOTEENN(random_state=42)
         X_train_res, y_train_res = smote_enn.fit_resample(X_train, y_train)
 
         with mlflow.start_run(run_name="final_catboost_model"):
-            # Train final CatBoost model
             model = CatBoostClassifier(**best_params)
             model.fit(X_train_res, y_train_res)
 
-            # Predictions
             y_pred_proba = model.predict_proba(X_test)[:, 1]
-            
-    
-           
             best_thresh = 0.3
             y_pred = (y_pred_proba >= best_thresh).astype(int)
 
-            # Metrics
             metrics = {
                 'accuracy': float((y_test == y_pred).mean()),
                 'precision': float(np.round(precision_score(y_test, y_pred, zero_division=0), 3)),
@@ -132,30 +119,30 @@ def final_model_training(**kwargs):
                 'roc_auc': float(roc_auc_score(y_test, y_pred_proba))
             }
 
-            # Prometheus
+            # Save latest metrics for app usage
+            with open(LATEST_METRICS_FILE, "w") as f:
+                json.dump(metrics, f)
+
             for metric_name, value in metrics.items():
                 PROM_GAUGES[metric_name].labels(dag_id=kwargs['dag'].dag_id).set(value)
 
-            # MLflow
             mlflow.log_metrics(metrics)
             mlflow.log_params(best_params)
             mlflow.log_param("best_threshold", float(best_thresh))
-            
+
             signature = infer_signature(X_train_res, model.predict(X_train_res))
             mlflow.sklearn.log_model(model, "catboost_best_model", signature=signature, input_example=X_train_res.iloc[:1])
-            
+
             save_pickle(model, os.path.join(MODEL_DIR, 'best_catboost_model.pkl'))
 
             logger.info("Classification Report:\n%s", classification_report(y_test, y_pred))
-            logger.info(f"✅ Final Model Metrics: {metrics}")
-
+            logger.info(f"Final Model Metrics: {metrics}")
         logger.info("=== FINAL MODEL TRAINING COMPLETED ===")
 
     except Exception as e:
-        logger.error(f"❌ Final model training failed: {e}")
+        logger.error(f"Final model training failed: {e}")
         raise
 
-# Task definitions
 tune_task = PythonOperator(
     task_id="hyperparameter_tuning",
     python_callable=hyperparameter_tuning,
@@ -169,5 +156,4 @@ final_train_task = PythonOperator(
     dag=dag,
 )
 
-# Dependencies
 tune_task >> final_train_task
