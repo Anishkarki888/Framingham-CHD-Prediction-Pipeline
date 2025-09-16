@@ -1,0 +1,15 @@
+artifact_uri: file:///home/anish/airflow/dags/monitoring/streamlit_app/mlruns/446730211103051361/fd76cc447a74440ba5baf0320a422b7d/artifacts
+end_time: 1758013951660
+entry_point_name: ''
+experiment_id: '446730211103051361'
+lifecycle_stage: active
+run_id: fd76cc447a74440ba5baf0320a422b7d
+run_name: user_prediction_raam
+run_uuid: fd76cc447a74440ba5baf0320a422b7d
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1758013951494
+status: 3
+tags: []
+user_id: anish

@@ -17,12 +17,11 @@ STREAMLIT_DIR = os.path.join(BASE_DIR, "streamlit_app")
 APP_PATH = os.path.join(STREAMLIT_DIR, "app.py")
 DATA_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "data_drift.py")
 CONCEPT_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "concept_drift.py")
-PROMETHEUS_SCRIPT = os.path.join(BASE_DIR, "prometheus_metrics.py")
-MLFLOW_DB = "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db"
+MLFLOW_DB = os.path.join(BASE_DIR, "mlflow", "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db")
 
 # Pkl paths for persistence
-DATA_DRIFT_PKL = os.path.join(BASE_DIR, "streamlit_app/data/data_drift_results.pkl")
-CONCEPT_DRIFT_PKL = os.path.join(BASE_DIR, "streamlit_app/data/concept_drift_results.pkl")
+DATA_DRIFT_PKL = os.path.join(STREAMLIT_DIR, "data/data_drift_results.pkl")
+CONCEPT_DRIFT_PKL = os.path.join(STREAMLIT_DIR, "data/concept_drift_results.pkl")
 
 # ------------------------------
 # Ports
@@ -30,9 +29,6 @@ CONCEPT_DRIFT_PKL = os.path.join(BASE_DIR, "streamlit_app/data/concept_drift_res
 APP_PORT = 8503
 DATA_DRIFT_PORT = 8504
 CONCEPT_DRIFT_PORT = 8505
-METRICS_PORT = 8001
-PROMETHEUS_UI_PORT = 9090
-GRAFANA_PORT = 3000
 MLFLOW_PORT = 5000
 
 # ------------------------------
@@ -76,6 +72,7 @@ def run_streamlit_app(path, port, save_pkl=None, pkl_data=None):
     threading.Thread(target=target, daemon=True).start()
 
 def run_mlflow():
+    """Run MLflow UI"""
     def target():
         if not is_port_in_use(MLFLOW_PORT):
             subprocess.Popen([
@@ -90,42 +87,6 @@ def run_mlflow():
         webbrowser.open(f"http://localhost:{MLFLOW_PORT}")
     threading.Thread(target=target, daemon=True).start()
 
-def run_prometheus_metrics_server():
-    def target():
-        if not is_port_in_use(METRICS_PORT):
-            subprocess.Popen([os.sys.executable, PROMETHEUS_SCRIPT])
-            try:
-                wait_for_port(METRICS_PORT, timeout=30)
-            except TimeoutError as e:
-                st.error(str(e))
-        webbrowser.open(f"http://localhost:{METRICS_PORT}")
-    threading.Thread(target=target, daemon=True).start()
-
-def start_docker_container(container_name, image_name, ports, url):
-    try:
-        existing = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
-            capture_output=True, text=True
-        ).stdout.strip()
-
-        if container_name not in existing:
-            subprocess.run(
-                ["docker", "run", "-d", "--name", container_name] + ports + [image_name],
-                check=True
-            )
-        else:
-            running = subprocess.run(
-                ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
-                capture_output=True, text=True
-            ).stdout.strip()
-            if container_name not in running:
-                subprocess.run(["docker", "start", container_name], check=True)
-
-        time.sleep(5)
-        webbrowser.open(url)
-    except Exception as e:
-        st.error(f"Failed to start {container_name}: {e}")
-
 # ------------------------------
 # Streamlit UI
 # ------------------------------
@@ -133,7 +94,7 @@ st.set_page_config(page_title="Framingham MLOps Dashboard", layout="wide")
 st.title("🏥 Framingham MLOps Dashboard")
 st.markdown("### Quick Launch")
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 # Sample placeholder data for pkl saving (replace with real calculation later)
 sample_data_drift = {"age": 0.1, "cholesterol": 0.2, "bp": 0.05}
@@ -148,24 +109,6 @@ with col1:
         run_streamlit_app(CONCEPT_DRIFT_PATH, CONCEPT_DRIFT_PORT, save_pkl=CONCEPT_DRIFT_PKL, pkl_data=sample_concept_drift)
 
 with col2:
-    if st.button("⚡ Python Prometheus Metrics"):
-        run_prometheus_metrics_server()
-    if st.button("🌐 Prometheus Web UI (Docker)"):
-        start_docker_container(
-            container_name="prometheus_container",
-            image_name="prom/prometheus:latest",
-            ports=["-p", f"{PROMETHEUS_UI_PORT}:9090"],
-            url=f"http://localhost:{PROMETHEUS_UI_PORT}/targets"
-        )
-    if st.button("📊 Grafana Dashboard (Docker)"):
-        start_docker_container(
-            container_name="grafana_container",
-            image_name="grafana/grafana:latest",
-            ports=["-p", f"{GRAFANA_PORT}:3000"],
-            url=f"http://localhost:{GRAFANA_PORT}"
-        )
-
-with col3:
     if st.button("🖥️ MLflow UI"):
         run_mlflow()
 
@@ -174,8 +117,5 @@ Ports:
 - User App: {APP_PORT}
 - Data Drift: {DATA_DRIFT_PORT}
 - Concept Drift: {CONCEPT_DRIFT_PORT}
-- Python Prometheus Metrics: {METRICS_PORT}
-- Prometheus Web UI: {PROMETHEUS_UI_PORT}/targets
-- Grafana: {GRAFANA_PORT}
 - MLflow: {MLFLOW_PORT}
 """)

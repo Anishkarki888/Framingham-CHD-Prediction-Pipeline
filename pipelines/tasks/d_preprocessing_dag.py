@@ -30,7 +30,7 @@ dag = DAG(
 
 
 def preprocess_data(**kwargs):
-    logger.info("=== STARTING DATA PREPROCESSING ===")
+    logger.info("STARTING DATA PREPROCESSING")
 
     # Initialize Redis client
     make_redis_client()
@@ -38,9 +38,8 @@ def preprocess_data(**kwargs):
     # Load raw data
     df = load_df("framingham_raw", name="raw dataframe")
 
-    # -------------------------------
+  
     # Data cleaning and preprocessing
-    # -------------------------------
     df = df.dropna(subset=["age", "male", "TenYearCHD"])
 
     numeric_cols = [
@@ -68,9 +67,8 @@ def preprocess_data(**kwargs):
     if scale_cols:
         df[scale_cols] = scaler.fit_transform(df[scale_cols])
 
-    # -------------------------------
+
     # Train/Test split
-    # -------------------------------
     X = df.drop(["TenYearCHD", "patient_id"], axis=1, errors="ignore")
     y = df["TenYearCHD"]
 
@@ -78,19 +76,18 @@ def preprocess_data(**kwargs):
         X, y, test_size=0.2, stratify=y, random_state=42
     )
 
-    # -------------------------------
+ 
     # Store processed data in Redis + local
-    # -------------------------------
     store_df("framingham_clean", df)
     store_df("X_train", X_train)
     store_df("X_test", X_test)
-    store_df("y_train", y_train)  # now Series is supported
+    store_df("y_train", y_train)  
     store_df("y_test", y_test)
 
     # Save scaler
     save_pickle(scaler, os.path.join(MODEL_DIR, "scaler.pkl"))
 
-    logger.info(f"=== PREPROCESSING COMPLETED | Cleaned dataset shape: {df.shape} ===")
+    logger.info(f"PREPROCESSING COMPLETED | Cleaned dataset shape: {df.shape}")
 
 
 preprocess_task = PythonOperator(

@@ -1,0 +1,6 @@
+artifact_location: file:///home/anish/airflow/dags/monitoring/streamlit_app/mlruns/446730211103051361
+creation_time: 1758013951380
+experiment_id: '446730211103051361'
+last_update_time: 1758013951380
+lifecycle_stage: active
+name: Framingham
