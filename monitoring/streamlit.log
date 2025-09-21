@@ -1,1 +1,7 @@
-2025-09-16 00:55:51.397 Port 8501 is already in use
+
+  You can now view your Streamlit app in your browser.
+
+  URL: http://0.0.0.0:8501
+
+2025-09-22 02:07:08,659 - utils - INFO - Loaded ML Pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl
+2025-09-22 02:07:08,659 - __main__ - INFO - ✅ Loaded pipeline from /home/anish/airflow/dags/monitoring/models/final_pipeline.pkl

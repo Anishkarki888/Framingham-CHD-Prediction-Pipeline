@@ -15,29 +15,10 @@ sys.path.append("/home/anish/airflow/dags/pipelines")
 # ----------------------------
 from tasks.a_data_ingest_dag import data_ingest
 from tasks.b_raw_validation_dag import validate_raw_data
-from tasks.c_star_schema_dag import build_star_schema
-from tasks.d_preprocessing_dag import preprocess_data
-from tasks.e_processed_validation_dag import validate_processed_data
-from tasks.f_model_training_dag import hyperparameter_tuning, final_model_training
-from tasks.g_model_deploy_dag import deploy_model
-
-# ----------------------------
-# Monitoring wrapper functions
-# ----------------------------
-def run_monitor_model():
-    sys.path.append("/home/anish/airflow/dags/monitoring")
-    from monitoring.monitor_model import run_streamlit_app, APP_PATH, APP_PORT
-    run_streamlit_app(APP_PATH, APP_PORT)
-
-def run_monitor_data_drift():
-    sys.path.append("/home/anish/airflow/dags/monitoring")
-    from monitoring.monitor_model import run_streamlit_app, DATA_DRIFT_PATH, DATA_DRIFT_PORT
-    run_streamlit_app(DATA_DRIFT_PATH, DATA_DRIFT_PORT)
-
-def run_monitor_concept_drift():
-    sys.path.append("/home/anish/airflow/dags/monitoring")
-    from monitoring.monitor_model import run_streamlit_app, CONCEPT_DRIFT_PATH, CONCEPT_DRIFT_PORT
-    run_streamlit_app(CONCEPT_DRIFT_PATH, CONCEPT_DRIFT_PORT)
+from tasks.c_preprocessing_dag import preprocess_data
+from tasks.d_processed_validation_dag import validate_processed_data
+from pipelines.tasks.e_model_training_dag import hyperparameter_tuning, final_model_training
+from pipelines.tasks.f_model_deploy_dag import deploy_model
 
 # ----------------------------
 # Default arguments
@@ -56,7 +37,7 @@ default_args = {
 dag = DAG(
     "framingham_mlops_pipeline",
     default_args=default_args,
-    description="Orchestrates Framingham MLOps pipeline with monitoring",
+    description="Orchestrates Framingham MLOps pipeline",
     start_date=datetime(2025, 8, 24),
     catchup=False,
     schedule_interval=None,
@@ -100,13 +81,6 @@ raw_validate_task = PythonOperator(
     dag=dag
 )
 
-# Build star schema
-star_schema_task = PythonOperator(
-    task_id="build_star_schema",
-    python_callable=build_star_schema,
-    dag=dag
-)
-
 # Preprocess data
 preprocess_task = PythonOperator(
     task_id="preprocess_data",
@@ -142,25 +116,6 @@ deploy_task = PythonOperator(
     dag=dag
 )
 
-# Monitoring tasks
-monitor_model_task = PythonOperator(
-    task_id="monitor_model_task",
-    python_callable=run_monitor_model,
-    dag=dag
-)
-
-monitor_data_drift_task = PythonOperator(
-    task_id="monitor_data_drift_task",
-    python_callable=run_monitor_data_drift,
-    dag=dag
-)
-
-monitor_concept_drift_task = PythonOperator(
-    task_id="monitor_concept_drift_task",
-    python_callable=run_monitor_concept_drift,
-    dag=dag
-)
-
 # Cleanup services placeholder
 cleanup_services = BashOperator(
     task_id="cleanup_services",
@@ -173,7 +128,7 @@ cleanup_services = BashOperator(
 # Task dependencies
 # ----------------------------
 start_services >> check_data_file
-check_data_file >> ingest_task >> raw_validate_task >> star_schema_task
-star_schema_task >> preprocess_task >> post_validate_task
+check_data_file >> ingest_task >> raw_validate_task
+raw_validate_task >> preprocess_task >> post_validate_task
 post_validate_task >> tune_task >> final_train_task >> deploy_task
-deploy_task >> monitor_model_task >> monitor_data_drift_task >> monitor_concept_drift_task >> cleanup_services
+deploy_task >> cleanup_services
