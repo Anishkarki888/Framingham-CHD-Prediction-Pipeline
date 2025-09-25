@@ -1,38 +1,58 @@
-import subprocess
-import threading
-import webbrowser
 import streamlit as st
+import subprocess
 import os
+import psutil
+import json
+import webbrowser
 import time
 import socket
-import psutil
-import pickle
-from datetime import datetime
 
-# ------------------------------
-# Paths and Ports
-# ------------------------------
+# ======================
+# Config
+# ======================
+PID_FILE = "service_pids.json"
+AIRFLOW_ENV = "myfirstenvironment"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 STREAMLIT_DIR = os.path.join(BASE_DIR, "streamlit_app")
 APP_PATH = os.path.join(STREAMLIT_DIR, "app.py")
 DATA_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "data_drift.py")
 CONCEPT_DRIFT_PATH = os.path.join(STREAMLIT_DIR, "concept_drift.py")
-NEW_DATA_FILE = os.path.join(BASE_DIR, "data/new_patient_data.csv")
-
 MLFLOW_DB = os.path.join(BASE_DIR, "mlflow/mlflow.db")
-AIRFLOW_ENV = "myfirstenvironment"
-MLFLOW_PORT = 5000
-APP_PORT = 8503
-DATA_DRIFT_PORT = 8504
-CONCEPT_DRIFT_PORT = 8505
-CONCEPT_DRIFT_THRESHOLD = 0.5
 
-DATA_DRIFT_PKL = os.path.join(STREAMLIT_DIR, "data/data_drift_results.pkl")
-CONCEPT_DRIFT_PKL = os.path.join(STREAMLIT_DIR, "data/concept_drift_results.pkl")
+PORTS = {
+    "Airflow Webserver": 8080,
+    "User App": 8503,
+    "Data Drift": 8504,
+    "Concept Drift": 8505,
+    "MLflow": 5000,
+}
 
-# ------------------------------
-# Utility Functions
-# ------------------------------
+# ======================
+# Load PID state
+# ======================
+if os.path.exists(PID_FILE):
+    with open(PID_FILE, "r") as f:
+        saved_pids = json.load(f)
+else:
+    saved_pids = {}
+
+if "processes" not in st.session_state:
+    st.session_state.processes = {}
+
+for service_name, pid in saved_pids.items():
+    if psutil.pid_exists(pid):
+        st.session_state.processes[service_name] = pid
+
+
+def save_pids():
+    with open(PID_FILE, "w") as f:
+        json.dump(st.session_state.processes, f)
+
+
+# ======================
+# Utilities
+# ======================
 def wait_for_port(port, host="localhost", timeout=30):
     start_time = time.time()
     while True:
@@ -44,94 +64,166 @@ def wait_for_port(port, host="localhost", timeout=30):
             if time.time() - start_time > timeout:
                 raise TimeoutError(f"Port {port} not open after {timeout}s")
 
-def is_port_in_use(port):
-    return any(conn.laddr.port == port for conn in psutil.net_connections())
 
-def save_pickle(obj, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as f:
-        pickle.dump(obj, f)
+def run_service(service_name, command, cwd=None, env_name=AIRFLOW_ENV, open_browser=False, port=None):
+    try:
+        full_command = f"conda run -n {env_name} {command}"
+        process = subprocess.Popen(full_command, shell=True, cwd=cwd)
+        st.session_state.processes[service_name] = process.pid
+        save_pids()
 
-def run_streamlit_app(path, port, save_pkl=None, pkl_data=None):
-    """Run Streamlit app and optionally save pkl data"""
-    def target():
-        if save_pkl and pkl_data:
-            save_pickle(pkl_data, save_pkl)
-        if not is_port_in_use(port):
-            subprocess.Popen([
-                os.sys.executable, "-m", "streamlit", "run", path,
-                "--server.port", str(port),
-                "--server.headless=true"
-            ], cwd=os.path.dirname(path))
+        if port:
             try:
                 wait_for_port(port, timeout=60)
             except TimeoutError as e:
                 st.error(str(e))
-        webbrowser.open(f"http://localhost:{port}")
-    threading.Thread(target=target, daemon=True).start()
 
-def run_mlflow():
-    """Run MLflow UI"""
-    def target():
-        if not is_port_in_use(MLFLOW_PORT):
-            subprocess.Popen([
-                os.sys.executable, "-m", "mlflow", "ui",
-                "--backend-store-uri", f"sqlite:///{MLFLOW_DB}",
-                "--port", str(MLFLOW_PORT)
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            try:
-                wait_for_port(MLFLOW_PORT, timeout=60)
-            except TimeoutError as e:
-                st.error(f"MLflow failed to start: {e}")
-        webbrowser.open(f"http://localhost:{MLFLOW_PORT}")
-    threading.Thread(target=target, daemon=True).start()
+        if open_browser and port:
+            webbrowser.open(f"http://localhost:{port}")
 
-# ------------------------------
-# Airflow Functions
-# ------------------------------
-def trigger_airflow_dag(dag_id="framingham_mlops_pipeline"):
-    """Trigger Airflow DAG"""
-    result = subprocess.run([
-        "conda", "run", "-n", AIRFLOW_ENV,
-        "airflow", "dags", "trigger", dag_id
-    ], capture_output=True, text=True)
+        st.success(f"{service_name} started")
+    except Exception as e:
+        st.error(f"Error starting {service_name}: {e}")
 
-    if result.returncode == 0:
-        st.success(f"DAG '{dag_id}' triggered successfully!")
+
+def stop_service(service_name):
+    if service_name not in st.session_state.processes:
+        return
+    try:
+        pid = st.session_state.processes[service_name]
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
+        parent.terminate()
+        del st.session_state.processes[service_name]
+        save_pids()
+        st.success(f"Stopped {service_name}")
+    except Exception as e:
+        st.error(f"Error stopping {service_name}: {e}")
+
+
+def is_running(service_name):
+    if service_name not in st.session_state.processes:
+        return False
+    pid = st.session_state.processes[service_name]
+    return psutil.pid_exists(pid)
+
+
+def trigger_dag_cli(dag_id):
+    """Trigger Airflow DAG using CLI (avoids REST API auth issues)"""
+    try:
+        subprocess.run(
+            f"conda run -n {AIRFLOW_ENV} airflow dags trigger {dag_id}",
+            shell=True,
+            check=True,
+        )
+        st.success(f"Triggered DAG: {dag_id}")
+    except subprocess.CalledProcessError as e:
+        st.error(f"Failed to trigger DAG {dag_id}: {e}")
+
+
+# ======================
+# Services
+# ======================
+SERVICES = {
+    "Airflow Scheduler": {
+        "command": "airflow scheduler",
+        "dir": None,
+        "port": None,
+        "browser": False,
+    },
+    "Airflow Webserver": {
+        "command": f"airflow webserver --port {PORTS['Airflow Webserver']}",
+        "dir": None,
+        "port": PORTS["Airflow Webserver"],
+        "browser": True,
+    },
+    "User App": {
+        "command": f"streamlit run {APP_PATH} --server.port {PORTS['User App']}",
+        "dir": os.path.dirname(APP_PATH),
+        "port": PORTS["User App"],
+        "browser": True,
+    },
+    "Data Drift": {
+        "command": f"streamlit run {DATA_DRIFT_PATH} --server.port {PORTS['Data Drift']}",
+        "dir": os.path.dirname(DATA_DRIFT_PATH),
+        "port": PORTS["Data Drift"],
+        "browser": True,
+    },
+    "Concept Drift": {
+        "command": f"streamlit run {CONCEPT_DRIFT_PATH} --server.port {PORTS['Concept Drift']}",
+        "dir": os.path.dirname(CONCEPT_DRIFT_PATH),
+        "port": PORTS["Concept Drift"],
+        "browser": True,
+    },
+    "MLflow": {
+        "command": f"mlflow ui --backend-store-uri sqlite:///{MLFLOW_DB} --port {PORTS['MLflow']}",
+        "dir": None,
+        "port": PORTS["MLflow"],
+        "browser": True,
+    },
+}
+
+# ======================
+# Streamlit UI
+# ======================
+st.set_page_config(page_title="MLOps Project - Anish Karki", layout="wide")
+
+# ---- Heading ----
+st.markdown(
+    """
+    <div style="text-align: center; background-color:#E3F2FD;
+                padding:25px; border-radius:12px; margin-bottom:20px;">
+        <h1 style="color:#0D47A1;">❤️ MLOps Project</h1>
+        <h3 style="color:#1565C0;">Code Painted by <b>Anish Karki</b></h3>
+        <p style="color:#0D47A1;">Orchestrating ML pipeline, deployment and monitoring</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown("---")
+
+# ---- Service Controls ----
+cols = st.columns(3)
+
+for i, (service_name, config) in enumerate(SERVICES.items()):
+    with cols[i % 3]:
+        st.markdown(
+            f"""
+            <div style="background-color:#BBDEFB;padding:20px;border-radius:12px;margin-bottom:15px;">
+                <h4 style="color:#0D47A1;">⭐ {service_name}</h4>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        run_key = f"run_{service_name.replace(' ', '_')}"
+        stop_key = f"stop_{service_name.replace(' ', '_')}"
+
+        if is_running(service_name):
+            st.success("Running ✅")
+            if st.button("Stop", key=stop_key):
+                stop_service(service_name)
+        else:
+            st.info("Stopped ❌")
+            if st.button("Start", key=run_key):
+                run_service(
+                    service_name,
+                    config["command"],
+                    cwd=config["dir"],
+                    port=config["port"],
+                    open_browser=config["browser"],
+                )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ---- Trigger Airflow DAGs ----
+st.subheader("🚀 Trigger Airflow DAGs")
+dag_id = st.text_input("Enter DAG ID to trigger:")
+if st.button("Trigger DAG"):
+    if dag_id.strip():
+        trigger_dag_cli(dag_id.strip())
     else:
-        st.error(f"Failed to trigger DAG: {result.stderr}")
-
-# ------------------------------
-# Streamlit Dashboard
-# ------------------------------
-st.set_page_config(page_title="Framingham MLOps Dashboard", layout="wide")
-st.title("🏥 Framingham MLOps Dashboard")
-st.markdown("### Quick Launch")
-
-col1, col2 = st.columns(2)
-
-# Sample placeholder data for pkl saving
-sample_data_drift = {"age": 0.1, "cholesterol": 0.2, "bp": 0.05}
-sample_concept_drift = 0.87
-
-with col1:
-    if st.button("🔄 Trigger Main DAG"):
-        trigger_airflow_dag()
-    if st.button("🧑 User Input App"):
-        run_streamlit_app(APP_PATH, APP_PORT)
-    if st.button("📊 Data Drift Dashboard"):
-        run_streamlit_app(DATA_DRIFT_PATH, DATA_DRIFT_PORT, save_pkl=DATA_DRIFT_PKL, pkl_data=sample_data_drift)
-    if st.button("📈 Concept Drift Dashboard"):
-        run_streamlit_app(CONCEPT_DRIFT_PATH, CONCEPT_DRIFT_PORT, save_pkl=CONCEPT_DRIFT_PKL, pkl_data=sample_concept_drift)
-
-with col2:
-    if st.button("🖥️ MLflow UI"):
-        run_mlflow()
-
-st.info(f"""
-Ports:
-- User App: {APP_PORT}
-- Data Drift: {DATA_DRIFT_PORT}
-- Concept Drift: {CONCEPT_DRIFT_PORT}
-- MLflow: {MLFLOW_PORT}
-""")
+        st.warning("Please enter a DAG ID")

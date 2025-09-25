@@ -79,4 +79,4 @@ post_validate_task = PythonOperator(
     provide_context=True,
     dag=dag,
 )
-(Redis/Pickle)
+# (Redis/Pickle)
