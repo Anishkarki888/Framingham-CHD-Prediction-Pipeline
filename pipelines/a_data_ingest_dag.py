@@ -1,13 +1,8 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from utils import get_engine_with_retry, store_df, logger, make_redis_client, redis_conn
+from utils import get_engine_with_retry, store_df, logger
 import pandas as pd
-import os
-import time
-
-
-# Default DAG args
 
 default_args = {
     'owner': 'Anish',
@@ -28,46 +23,31 @@ dag = DAG(
     is_paused_upon_creation=False
 )
 
-# Data ingestion task
 def data_ingest(**kwargs):
-    logger.info("STARTING DATA INGEST (ELT: Load RAW)")
-    
-    # Initialize Redis client
-    make_redis_client()
-    r = redis_conn()
-    if not r:
-        raise ValueError("Redis client could not be initialized")
-
-    # Find dataset
-    paths = ['/home/anish/airflow/dags/framingham.csv']
+    logger.info("=== STARTING DATA INGEST (ELT: Load RAW) ===")
+    paths = [
+        '/home/anish/framingham.csv',
+        './framingham.csv',
+        '/tmp/framingham.csv',
+        '/home/anish/airflow/dags/framingham.csv'
+    ]
     df = None
     for p in paths:
-        if os.path.exists(p):
+        try:
             df = pd.read_csv(p)
-            logger.info("Loaded dataset from %s, shape=%s", p, df.shape)
+            logger.info("Loaded dataset from %s", p)
             break
-    
+        except FileNotFoundError:
+            continue
     if df is None:
         raise FileNotFoundError("framingham.csv not found in any specified path")
-    
-    # Add unique patient ID
+
     df['patient_id'] = range(1, len(df) + 1)
-    
-    # Persist to Redis + local
+
+    # Persist raw data for downstream tasks
     store_df("framingham_raw", df)
 
-    # Confirm Redis key exists before finishing
-    retries = 5
-    for i in range(retries):
-        if r.exists("framingham_raw"):
-            logger.info("framingham_raw' successfully stored in Redis")
-            break
-        logger.warning(f"'framingham_raw' not yet in Redis, retrying... ({i+1}/{retries})")
-        time.sleep(2)
-    else:
-        raise ValueError("Failed to store 'framingham_raw' in Redis after retries")
-
-    # Write to MariaDB staging
+    # Write to MariaDB staging table
     try:
         engine = get_engine_with_retry()
         with engine.begin() as conn:
@@ -76,10 +56,8 @@ def data_ingest(**kwargs):
     except Exception as e:
         logger.warning("Failed to write staging to MariaDB: %s", e)
 
-    logger.info("DATA INGEST COMPLETED")
+    logger.info("=== DATA INGEST COMPLETED ===")
 
-
-# DAG task
 ingest_task = PythonOperator(
     task_id="data_ingest",
     python_callable=data_ingest,

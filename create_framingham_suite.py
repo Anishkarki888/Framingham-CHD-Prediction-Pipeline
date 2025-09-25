@@ -16,4 +16,4 @@ validator.expect_column_values_to_not_be_null("age")
 # Save expectation suite (new API: no overwrite_existing)
 validator.save_expectation_suite(discard_failed_expectations=False)
 
-print("✅ Expectation suite 'framingham_suite' created successfully!")
+print(" Expectation suite 'framingham_suite' created successfully!")

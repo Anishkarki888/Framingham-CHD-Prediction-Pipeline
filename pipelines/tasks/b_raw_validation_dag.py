@@ -35,7 +35,7 @@ def validate_raw_data(**kwargs):
         try:
             if redis_conn and redis_conn.exists("framingham_raw"):
                 df = load_df("framingham_raw")
-                logger.info("✅ Loaded 'framingham_raw' from Redis")
+                logger.info("Loaded 'framingham_raw' from Redis")
                 break
         except Exception as e:
             logger.warning(f"Redis check failed: {e}")
@@ -46,9 +46,9 @@ def validate_raw_data(**kwargs):
     if df is None:
         try:
             df = load_df("framingham_raw")
-            logger.info("⚠️ Redis unavailable. Loaded 'framingham_raw' from local pickle")
+            logger.info("Redis unavailable. Loaded 'framingham_raw' from local pickle")
         except FileNotFoundError:
-            raise ValueError("❌ 'framingham_raw' not found in Redis or local pickle. Ensure ingestion completed.")
+            raise ValueError("framingham_raw' not found in Redis or local pickle. Ensure ingestion completed.")
 
     # Great Expectations validation
     ge_df = ge.dataset.PandasDataset(df)
@@ -57,7 +57,7 @@ def validate_raw_data(**kwargs):
     critical_cols = ["age", "male", "TenYearCHD"]
     missing_critical = [col for col in critical_cols if col not in df.columns]
     if missing_critical:
-        raise ValueError(f"❌ Critical columns missing: {missing_critical}")
+        raise ValueError(f"Critical columns missing: {missing_critical}")
     
     for col in critical_cols:
         ge_df.expect_column_values_to_not_be_null(col)
@@ -74,9 +74,9 @@ def validate_raw_data(**kwargs):
     # Run validation
     result = ge_df.validate()
     if result["success"]:
-        logger.info("=== RAW VALIDATION PASSED ===")
+        logger.info("RAW VALIDATION PASSED")
     else:
-        logger.warning("=== RAW VALIDATION COMPLETED WITH WARNINGS ===")
+        logger.warning("RAW VALIDATION COMPLETED WITH WARNINGS")
         logger.warning(result)
 
 validate_raw_data_task = PythonOperator(

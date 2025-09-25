@@ -38,6 +38,7 @@ st.title("Concept Drift Monitor")
 
 BASE_PATH = os.path.join(os.path.dirname(__file__), "../data")
 USER_PREDICTIONS_PATH = os.path.join(BASE_PATH, "user_predictions.pkl")
+CONCEPT_DRIFT_RESULTS = os.path.join(BASE_PATH, "concept_drift_results.pkl")  # NEW
 
 # Load reference dataset
 reference = load_pickle(os.path.join(BASE_PATH, "X_train.pkl"), "X_train")
@@ -45,25 +46,12 @@ reference = load_pickle(os.path.join(BASE_PATH, "X_train.pkl"), "X_train")
 # -----------------------
 # Persistent stack setup
 # -----------------------
-# Load existing predictions
 if os.path.exists(USER_PREDICTIONS_PATH):
     all_preds = load_pickle(USER_PREDICTIONS_PATH, "User Predictions") or []
 else:
     all_preds = []
 
-# -----------------------
-# Add new user input here
-# -----------------------
-# For example purposes, replace with your input collection
-# new_input = {
-#     "input": user_input_features,  
-#     "class": user_input_class,     
-#     "prediction": model_prediction 
-# }
-# if "input" in new_input and "class" in new_input:
-#     all_preds.append(new_input)
-
-# Keep only the last N entries (stack behavior)
+# Keep only last N entries
 N = 10
 all_preds = all_preds[-N:]
 
@@ -71,7 +59,7 @@ all_preds = all_preds[-N:]
 with open(USER_PREDICTIONS_PATH, "wb") as f:
     pickle.dump(all_preds, f)
 
-# Filter out invalid entries
+# Filter valid entries
 user_preds = [p for p in all_preds if "input" in p and "class" in p]
 
 # Prepare current data
@@ -94,14 +82,12 @@ else:
     from evidently.report import Report
     from evidently.metric_preset import ClassificationPreset, DataDriftPreset  
 
-    # Check if we have predictions to decide on report type
     has_predictions = len(predictions) > 0 and predictions.sum() > 0
     
     if has_predictions:
-        # Add target and prediction columns to BOTH datasets for ClassificationPreset
         reference_with_cols = reference.copy()
         reference_with_cols["target"] = np.zeros(len(reference))
-        reference_with_cols["prediction"] = np.zeros(len(reference))  # Add dummy predictions
+        reference_with_cols["prediction"] = np.zeros(len(reference))
         
         current_with_cols = current_data.copy()
         current_with_cols["target"] = current_labels
@@ -109,9 +95,7 @@ else:
         
         report = Report(metrics=[ClassificationPreset()])
         report.run(reference_data=reference_with_cols, current_data=current_with_cols)
-        
     else:
-        # For DataDriftPreset, only add target columns
         reference_with_cols = reference.copy()
         reference_with_cols["target"] = np.zeros(len(reference))
         
@@ -121,22 +105,28 @@ else:
         report = Report(metrics=[DataDriftPreset()])
         report.run(reference_data=reference_with_cols, current_data=current_with_cols)
 
-    # Save report
+    # Save HTML report
     REPORTS_PATH = os.path.join(os.path.dirname(__file__), "../reports")
     os.makedirs(REPORTS_PATH, exist_ok=True)
     report_file = os.path.join(REPORTS_PATH, "concept_drift_report.html")
     report.save_html(report_file)
-
     st.info(f"Concept drift report saved: {report_file}")
     st.components.v1.html(open(report_file, "r").read(), height=800, scrolling=True)
 
-    # Calculate AUC and send email if predictions exist
+    # -----------------------
+    # Calculate and save AUC
+    # -----------------------
     if has_predictions:
         from sklearn.metrics import roc_auc_score
         
         try:
             auc_score = roc_auc_score(current_labels, predictions)
             st.info(f"AUC score: {auc_score:.3f}")
+            
+            # SAVE AUC TO .PKL for Prometheus
+            with open(CONCEPT_DRIFT_RESULTS, "wb") as f:
+                pickle.dump(auc_score, f)
+            
             if auc_score < 0.5:
                 send_email(
                     subject="Alert: Low Model Performance Detected",

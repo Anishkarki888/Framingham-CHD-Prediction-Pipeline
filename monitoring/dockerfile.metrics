@@ -1,0 +1,29 @@
+# Dockerfile.metrics
+FROM python:3.8-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install prometheus client if not in requirements
+RUN pip install prometheus-client
+
+# Copy application files
+COPY prometheus_server.py .
+COPY ml_metrics_collector.py .
+
+# Create reports directory
+RUN mkdir -p /app/reports
+
+# Expose port
+EXPOSE 8001
+
+# Run the metrics server
+CMD ["python", "prometheus_server.py"]

@@ -26,7 +26,7 @@ current = load_pickle(os.path.join(BASE_PATH, "X_test.pkl"), "X_test")
 dashboard = Dashboard(tabs=[DataDriftTab()])
 
 # New Evidently requires column_mapping (optional, can be empty)
-column_mapping = {}  # Add column info if needed
+column_mapping = {}  
 
 dashboard.calculate(reference_data=reference, current_data=current, column_mapping=column_mapping)
 

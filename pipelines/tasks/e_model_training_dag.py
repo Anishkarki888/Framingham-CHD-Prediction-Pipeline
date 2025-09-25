@@ -16,7 +16,7 @@ import pandas as pd
 import os
 import json
 
-# Prometheus metrics
+# ---------------- Prometheus metrics ----------------
 PROM_GAUGES = {
     "accuracy": Gauge("training_model_accuracy", "Training Model Accuracy", ["dag_id"]),
     "precision": Gauge("training_model_precision", "Training Model Precision", ["dag_id"]),
@@ -25,14 +25,12 @@ PROM_GAUGES = {
     "roc_auc": Gauge("training_model_roc_auc", "Training Model ROC-AUC", ["dag_id"])
 }
 
-# MLflow setup
+# ---------------- MLflow setup ----------------
 MLFLOW_DB_PATH = os.getenv("MLFLOW_DB_PATH", "/home/anish/airflow/dags/monitoring/mlflow/mlflow.db")
 mlflow.set_tracking_uri(f"sqlite:////{MLFLOW_DB_PATH}")
 mlflow.set_experiment("Framingham")
 
-# Metrics file path for latest metrics
-LATEST_METRICS_FILE = os.path.join(MODEL_DIR, "latest_metrics.json")
-
+# ---------------- DAG default args ----------------
 default_args = {
     'owner': 'Anish',
     'depends_on_past': False,
@@ -52,6 +50,7 @@ dag = DAG(
     is_paused_upon_creation=False
 )
 
+# ---------------- Hyperparameter tuning ----------------
 def hyperparameter_tuning(**kwargs):
     logger.info("=== STARTING HYPERPARAMETER TUNING ===")
     make_redis_client()
@@ -73,8 +72,7 @@ def hyperparameter_tuning(**kwargs):
             }
             model = CatBoostClassifier(**params)
             skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-            score = cross_val_score(model, X_train_res, y_train_res, cv=skf, scoring='roc_auc', n_jobs=1).mean()
-            return score
+            return cross_val_score(model, X_train_res, y_train_res, cv=skf, scoring='roc_auc', n_jobs=1).mean()
 
         with mlflow.start_run(run_name="catboost_optuna"):
             study = optuna.create_study(direction='maximize')
@@ -84,11 +82,11 @@ def hyperparameter_tuning(**kwargs):
             mlflow.log_params(best_params)
             mlflow.log_metric("best_roc_auc", float(study.best_value))
             logger.info("=== HYPERPARAMETER TUNING COMPLETED, Best ROC-AUC=%s ===", study.best_value)
-
     except Exception as e:
         logger.error(f"Hyperparameter tuning failed: {e}")
         raise
 
+# ---------------- Final model training ----------------
 def final_model_training(**kwargs):
     logger.info("=== STARTING FINAL MODEL TRAINING ===")
     make_redis_client()
@@ -119,30 +117,33 @@ def final_model_training(**kwargs):
                 'roc_auc': float(roc_auc_score(y_test, y_pred_proba))
             }
 
-            # Save latest metrics for app usage
-            with open(LATEST_METRICS_FILE, "w") as f:
-                json.dump(metrics, f)
-
+            # Prometheus update
             for metric_name, value in metrics.items():
                 PROM_GAUGES[metric_name].labels(dag_id=kwargs['dag'].dag_id).set(value)
 
+            # MLflow logging
             mlflow.log_metrics(metrics)
             mlflow.log_params(best_params)
             mlflow.log_param("best_threshold", float(best_thresh))
-
             signature = infer_signature(X_train_res, model.predict(X_train_res))
             mlflow.sklearn.log_model(model, "catboost_best_model", signature=signature, input_example=X_train_res.iloc[:1])
-
             save_pickle(model, os.path.join(MODEL_DIR, 'best_catboost_model.pkl'))
+
+            # Save latest metrics JSON for Streamlit
+            latest_metrics_path = os.path.join(MODEL_DIR, "latest_metrics.json")
+            with open(latest_metrics_path, "w") as f:
+                json.dump(metrics, f)
+            logger.info(f"Latest metrics saved at {latest_metrics_path}")
 
             logger.info("Classification Report:\n%s", classification_report(y_test, y_pred))
             logger.info(f"Final Model Metrics: {metrics}")
-        logger.info("=== FINAL MODEL TRAINING COMPLETED ===")
 
+        logger.info("=== FINAL MODEL TRAINING COMPLETED ===")
     except Exception as e:
         logger.error(f"Final model training failed: {e}")
         raise
 
+# ---------------- Tasks ----------------
 tune_task = PythonOperator(
     task_id="hyperparameter_tuning",
     python_callable=hyperparameter_tuning,

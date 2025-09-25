@@ -42,9 +42,9 @@ def validate_processed_data(**kwargs):
     # Load preprocessed data from Redis
     try:
         df = load_df("framingham_clean")
-        logger.info(f"✅ Loaded preprocessed data from Redis, shape={df.shape}")
+        logger.info(f"Loaded preprocessed data from Redis, shape={df.shape}")
     except Exception as e:
-        logger.error(f"❌ Failed to load preprocessed data from Redis: {e}")
+        logger.error(f"Failed to load preprocessed data from Redis: {e}")
         raise
 
     # Initialize Great Expectations dataset
@@ -69,7 +69,7 @@ def validate_processed_data(**kwargs):
     PROM_GAUGES["validation_success"].labels(dag_id=kwargs['dag'].dag_id).set(1 if result["success"] else 0)
 
     if not result["success"]:
-        raise ValueError("❌ Processed validation failed")
+        raise ValueError("Processed validation failed")
     
     logger.info("=== PROCESSED DATA VALIDATION PASSED ===")
 
@@ -79,3 +79,4 @@ post_validate_task = PythonOperator(
     provide_context=True,
     dag=dag,
 )
+(Redis/Pickle)

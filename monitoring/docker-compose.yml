@@ -69,37 +69,6 @@ services:
       - mlops
     restart: unless-stopped
 
-  # ---------------- Prometheus ----------------
-
-
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus_container
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    ports:
-      - "9090:9090"
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana
-    container_name: grafana_container
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-
-  framingham_app:
-    build: .
-    container_name: framingham_app_container
-    command: uvicorn home_app:app --host 0.0.0.0 --port 8001 --reload
-    volumes:
-      - .:/app
-    ports:
-      - "8001:8001"
-    restart: unless-stopped
-
 
   # ---------------- Streamlit UI ----------------
   streamlit:
@@ -126,8 +95,7 @@ services:
 volumes:
   mariadb_data:
   mlflow_data:
-  grafana_data:
-  prometheus_data:
+
 
 networks:
   mlops:
