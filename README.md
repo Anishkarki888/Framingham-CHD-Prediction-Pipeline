@@ -34,7 +34,7 @@ airflow/dags/framingham_dags/
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = "anish_24152356@sunway.edu.np"  
-SMTP_PASSWORD = "sunwaY@123"  
+SMTP_PASSWORD = "**********"
 RECIPIENT_EMAIL = "anishkarki989@gmail.com"  
 
 '''
